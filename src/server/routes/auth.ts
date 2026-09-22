@@ -31,12 +31,12 @@ app.post('/login',async c=>{
   const {companyId,loginIdentifier,password}=parsed.data;
   const user=await c.env.DB.prepare(`
     SELECT cu.id,cu.company_id,cu.employee_id,cu.password_hash,cu.status,cu.must_change_password,cu.failed_login_count,cu.locked_until,
-      c.status company_status,c.company_identifier,c.display_name,c.legal_name
+      c.status company_status,c.management_status,c.company_identifier,c.display_name,c.legal_name
     FROM company_users cu JOIN companies c ON c.id=cu.company_id
     WHERE c.company_identifier=? AND cu.username=? LIMIT 1`)
     .bind(companyId,loginIdentifier).first<any>();
-  if(!user || user.company_status!=='active' || await locked(user.status,user.locked_until) || !(await verifyPassword(password,user.password_hash))){
-    if(user && user.company_status==='active' && user.status==='active') await failCompany(c,user);
+  if(!user || user.company_status!=='active' || user.management_status!=='active' || await locked(user.status,user.locked_until) || !(await verifyPassword(password,user.password_hash))){
+    if(user && user.company_status==='active' && user.management_status==='active' && user.status==='active') await failCompany(c,user);
     return c.json({error:'INVALID_CREDENTIALS'},401);
   }
   const session=await createCompanySession(c,user.id);

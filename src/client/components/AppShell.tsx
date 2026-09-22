@@ -19,7 +19,7 @@ export function AppShell(){
  if(!ctx) return <div className="panel-empty">جاري التحقق من الجلسة...</div>;
  const s=ctx.session, platform=Boolean(s.platformUserId), inCompany=s.accessMode==='super_admin_company_access'||s.accessMode==='company_user';
  const nav=platform&&!inCompany?[{label:'الرئيسية',to:'/',icon:LayoutDashboard},{label:'الشركات',to:'/platform/companies',icon:Building2},{label:'سجل التدقيق',to:'#',icon:FileText}]:s.roles?.includes('company_admin')?[...companyNav,{label:'طلبات دخول مدير المنصة',to:'/access-requests',icon:ShieldCheck}]:companyNav;
- const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':'HR Nexus';
+ const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform/companies/new')?'إضافة شركة':location.pathname.startsWith('/platform/companies/')?'تفاصيل الشركة':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':'HR Nexus';
  const toggle=(label:string)=>setExpanded(v=>v.includes(label)?v.filter(x=>x!==label):[...v,label]);
  async function logout(){await api('/api/auth/logout',{method:'POST'});location.href='/login'}
  async function exitCompany(){await api('/api/platform/exit-company',{method:'POST'});location.href='/'}

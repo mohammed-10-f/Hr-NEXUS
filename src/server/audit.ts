@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import type { Env } from './env';
-import { hashOptional } from './auth/session';
+import { hashOptional } from './auth/crypto';
 
 export async function audit(c: Context<Env>, action:string, resource:string, resourceId:string|null=null, metadata:Record<string,unknown>={}, actor?:{type:'platform'|'company';platformUserId?:string|null;companyUserId?:string|null;companyId?:string|null}) {
   const s=c.get('session');

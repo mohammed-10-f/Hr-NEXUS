@@ -31,3 +31,7 @@ export async function sha256(value: string) {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
   return bytesToBase64(new Uint8Array(digest));
 }
+
+export async function hashOptional(value: string | undefined) {
+  return value ? sha256(value) : null;
+}
