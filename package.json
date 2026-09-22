@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 migrations apply hr-nexu --local",
     "db:migrate:remote": "wrangler d1 migrations apply hr-nexu --remote",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "db:seed:test": "node scripts/seed-test-data.mjs",
+    "db:seed:test:remote": "node scripts/seed-test-data.mjs --remote"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.3",
