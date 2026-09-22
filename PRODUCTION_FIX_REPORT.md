@@ -46,9 +46,3 @@ The following must therefore remain UNVERIFIED until run against the real `hr-ne
 - deployed regression test
 
 Do not label those live tests PASS until they are executed against the configured Cloudflare Worker and D1 database.
-
-
-## 2026-09-22 Cloudflare PBKDF2 compatibility hardening
-- `src/server/auth/crypto.ts`: password hashing now uses 100,000 PBKDF2-SHA-256 iterations because the deployed Cloudflare Workers runtime rejected 210,000 during password-change hashing.
-- `db/migrations/0004_production_super_admin_initialization.sql`: initial `superadmin / Mm123456` hash aligned with the 100,000-iteration implementation.
-- `src/client/pages/ChangePassword.tsx`: password-change errors now distinguish invalid current password, password reuse, and validation failures instead of showing the same generic message for every API error.

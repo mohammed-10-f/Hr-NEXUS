@@ -1,0 +1,18 @@
+HR NEXUS - CURRENT D1 REPAIR
+
+The current remote database already contains the must_change_password column.
+Run db/repair_superadmin.sql ONCE against the existing hr-nexu D1 database.
+Do NOT run the 0004 migration against this database if Cloudflare reports it as pending and the column already exists; first reconcile migration history/schema rather than forcing it.
+
+After the repair, verify:
+username=superadmin
+status=active
+must_change_password=1
+failed_login_count=0
+locked_until=NULL
+password_hash starts with pbkdf2$100000$
+
+Then deploy this project. Initial login:
+superadmin / Mm123456
+
+The Worker now creates new password hashes with PBKDF2 100000 iterations, which is supported by the deployed Cloudflare Workers runtime.

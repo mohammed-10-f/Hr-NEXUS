@@ -11,7 +11,7 @@ const password=process.env.HR_NEXUS_TEST_PASSWORD || 'Mm123456';
 
 function hash(pw){
   const salt=crypto.randomUUID();
-  const iterations=210000;
+  const iterations=100000;
   const derived=crypto.pbkdf2Sync(pw,Buffer.from(salt),iterations,32,'sha256').toString('base64');
   return `pbkdf2$${iterations}$${salt}$${derived}`;
 }
