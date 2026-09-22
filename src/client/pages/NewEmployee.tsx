@@ -1,0 +1,3 @@
+import { Link } from 'react-router-dom';
+import { ArrowRight, LockKeyhole } from 'lucide-react';
+export function NewEmployee(){return <div><div className="page-header"><div><div className="breadcrumbs-inner"><Link to="/employees">الموظفون</Link><ArrowRight size={14}/><span>إضافة موظف</span></div><h1>إضافة موظف</h1><p>واجهة الإضافة مجهزة، بينما منطق الإنشاء سيُفعّل بعد اعتماد دورة البيانات والصلاحيات.</p></div></div><section className="locked-form"><div className="state-icon"><LockKeyhole size={23}/></div><h2>غير مفعلة في Phase 1</h2><p>لن يتم إنشاء سجلات وهمية أو زر شكلي. سيتم ربط نموذج الإضافة بالتحقق والصلاحيات وقواعد رقم الموظف والهوية في المرحلة التالية.</p></section></div>}

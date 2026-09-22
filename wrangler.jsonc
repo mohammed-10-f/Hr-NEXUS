@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hr-nexus",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-22",
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hr-nexu",
+      "database_id": "6010e3ea-b8a7-44a6-bf79-bb45bdcba837",
+      "migrations_dir": "db/migrations"
+    }
+  ]
+}
