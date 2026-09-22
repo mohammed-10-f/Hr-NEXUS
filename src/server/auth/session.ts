@@ -67,10 +67,10 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
   if (!raw) return null;
   const tokenHash = await sha256(raw);
   const platform = await c.env.DB.prepare(`
-    SELECT s.id,s.platform_user_id,pu.display_name,pu.status, s.expires_at,s.last_activity_at
+    SELECT s.id,s.platform_user_id,pu.display_name,pu.status,pu.must_change_password, s.expires_at,s.last_activity_at
     FROM sessions s JOIN platform_users pu ON pu.id=s.platform_user_id
     WHERE s.session_type='platform' AND s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>CURRENT_TIMESTAMP AND pu.status='active'
-  `).bind(tokenHash).first<{id:string;platform_user_id:string;display_name:string;status:string;expires_at:string}>();
+  `).bind(tokenHash).first<{id:string;platform_user_id:string;display_name:string;status:string;must_change_password:number;expires_at:string}>();
   if (platform) {
     if (Date.now()-new Date(platform.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(platform.id).run(); return null; }
     await c.env.DB.prepare(`UPDATE sessions SET last_activity_at=CURRENT_TIMESTAMP WHERE id=?`).bind(platform.id).run();
@@ -90,12 +90,12 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
           AND cas.expires_at>CURRENT_TIMESTAMP AND c.status='active' AND c.management_status='active'
       `).bind(accessHash,platform.platform_user_id).first<{id:string;company_id:string;request_id:string|null;expires_at:string;last_activity_at:string;company_identifier:string;display_name:string;legal_name:string;status:string;management_status:string}>();
       if (access) {
-        if (Date.now()-new Date(access.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE company_access_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(access.id).run(); if(access.request_id) await c.env.DB.prepare(`UPDATE company_access_requests SET status='revoked',revoked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='approved'`).bind(access.request_id).run(); await audit(c,'company_access_ended','company',access.company_id,{requestId:access.request_id,reason:'inactivity'}); return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:false}; }
+        if (Date.now()-new Date(access.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE company_access_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(access.id).run(); if(access.request_id) await c.env.DB.prepare(`UPDATE company_access_requests SET status='revoked',revoked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='approved'`).bind(access.request_id).run(); await audit(c,'company_access_ended','company',access.company_id,{requestId:access.request_id,reason:'inactivity'}); return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:Boolean(platform.must_change_password)}; }
         await c.env.DB.prepare(`UPDATE company_access_sessions SET last_activity_at=CURRENT_TIMESTAMP WHERE id=?`).bind(access.id).run();
-        return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:access.company_id,accessMode:'super_admin_company_access',roles:['super_admin'],employeeId:null,mustChangePassword:false,company:{id:access.company_id,companyIdentifier:access.company_identifier,displayName:access.display_name,legalName:access.legal_name,status:access.management_status}};
+        return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:access.company_id,accessMode:'super_admin_company_access',roles:['super_admin'],employeeId:null,mustChangePassword:Boolean(platform.must_change_password),company:{id:access.company_id,companyIdentifier:access.company_identifier,displayName:access.display_name,legalName:access.legal_name,status:access.management_status}};
       }
     }
-    return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:false};
+    return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:Boolean(platform.must_change_password)};
   }
   const company = await c.env.DB.prepare(`
     SELECT s.id,s.company_user_id,cu.company_id,s.last_activity_at,cu.employee_id,cu.must_change_password,cu.status,

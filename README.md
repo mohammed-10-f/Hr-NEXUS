@@ -48,7 +48,7 @@ For a real remote D1 migration, only after confirming the target is the intended
 npm run db:migrate:remote
 ```
 
-## Phase 2 test data
+## Optional Phase 2 test data
 
 Test data is deliberately separate from the migration and is never required for production functionality.
 
@@ -62,11 +62,13 @@ Remote test data:
 npm run db:seed:test:remote
 ```
 
-The seed script uses `Mm123456` as the test password unless `HR_NEXUS_TEST_PASSWORD` is supplied.
+The production migration `0004_production_super_admin_initialization.sql` initializes the first platform Super Admin independently of test data.
 
-It creates:
+The optional seed script uses `Mm123456` as its test password unless `HR_NEXUS_TEST_PASSWORD` is supplied.
 
-- Super Admin: `superadmin`
+It creates test company records and a test Super Admin:
+
+- Test Super Admin: `superadmin`
 - Company A: `A001`
 - Company A Admin: `1234567890`
 - Company A Employee: `1001`

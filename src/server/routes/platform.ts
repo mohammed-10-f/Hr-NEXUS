@@ -1,13 +1,14 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env } from '../env';
-import { requireSuperAdmin, requireCompanyUser } from '../middleware/session';
+import { requireSuperAdmin, requireCompanyUser, requirePasswordChanged } from '../middleware/session';
 import { createCompanyAccessSession, getCookie, revokeCompanyAccess } from '../auth/session';
 import { audit } from '../audit';
 import { hashPassword, sha256 } from '../auth/crypto';
 import { hasPermission } from '../authorization';
 
 const app=new Hono<Env>();
+app.use('*',requirePasswordChanged);
 const companySchema=z.object({
   companyIdentifier:z.string().trim().regex(/^[A-Za-z0-9_-]{2,32}$/),
   legalName:z.string().trim().min(2).max(200),

@@ -49,7 +49,7 @@ app.post('/platform-login',async c=>{
   const parsed=platformLogin.safeParse(await c.req.json().catch(()=>null));
   if(!parsed.success) return c.json({error:'INVALID_INPUT'},400);
   const {username,password}=parsed.data;
-  const user=await c.env.DB.prepare(`SELECT id,display_name,password_hash,status,failed_login_count,locked_until FROM platform_users WHERE username=? LIMIT 1`).bind(username).first<any>();
+  const user=await c.env.DB.prepare(`SELECT id,display_name,password_hash,status,must_change_password,failed_login_count,locked_until FROM platform_users WHERE username=? LIMIT 1`).bind(username).first<any>();
   if(!user || await locked(user?.status??'inactive',user?.locked_until??null) || !(await verifyPassword(password,user?.password_hash??''))){
     if(user && user.status==='active') await failPlatform(c,user);
     return c.json({error:'INVALID_CREDENTIALS'},401);
@@ -57,7 +57,7 @@ app.post('/platform-login',async c=>{
   const session=await createPlatformSession(c,user.id);
   await c.env.DB.prepare(`UPDATE platform_users SET failed_login_count=0,locked_until=NULL,last_login_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(user.id).run();
   await audit(c,'login','platform_user',user.id,{},{type:'platform',platformUserId:user.id});
-  return c.json({ok:true,session:{expiresAt:session.expiresAt}});
+  return c.json({ok:true,session:{expiresAt:session.expiresAt,mustChangePassword:Boolean(user.must_change_password)}});
 });
 
 app.post('/logout',async c=>{await revokeCurrentSession(c);return c.json({ok:true});});
@@ -75,7 +75,7 @@ app.post('/change-password',requireAuthentication,async c=>{
   }else if(s.platformUserId){
     const user=await c.env.DB.prepare(`SELECT id,password_hash FROM platform_users WHERE id=?`).bind(s.platformUserId).first<any>();
     if(!user || !(await verifyPassword(parsed.data.currentPassword,user.password_hash))) return c.json({error:'INVALID_CREDENTIALS'},401);
-    await c.env.DB.prepare(`UPDATE platform_users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(await hashPassword(parsed.data.newPassword),user.id).run();
+    await c.env.DB.prepare(`UPDATE platform_users SET password_hash=?,must_change_password=0,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(await hashPassword(parsed.data.newPassword),user.id).run();
     await audit(c,'password_change','platform_user',user.id,{});
   }
   return c.json({ok:true});
