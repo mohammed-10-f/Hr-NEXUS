@@ -9,14 +9,14 @@ ALTER TABLE platform_users ADD COLUMN must_change_password INTEGER NOT NULL DEFA
 -- Initial platform credentials:
 -- username: superadmin
 -- temporary password: Mm123456
--- Password is stored only as a PBKDF2 hash compatible with src/server/auth/crypto.ts.
+-- Password is stored only as a PBKDF2 hash compatible with src/server/auth/crypto.ts (100,000 PBKDF2-SHA-256 iterations, supported by Cloudflare Workers).
 INSERT INTO platform_users(
   id, username, display_name, password_hash, must_change_password, status
 ) VALUES (
   'platform-super-admin-initial',
   'superadmin',
   'مدير المنصة',
-  'pbkdf2$210000$b04ee84e-1d95-4ea4-b288-b97062f11e48$nzUgWmqSeJhYNUmoiGVhCvL/Xl9bBwW0ok4VEUrdaQk=',
+  'pbkdf2$100000$b04ee84e-1d95-4ea4-b288-b97062f11e48$MHUUtxXoPYz8NO+6PtrPIeOqAnZ9RdJsUk8E8An/HjU=',
   1,
   'active'
 )

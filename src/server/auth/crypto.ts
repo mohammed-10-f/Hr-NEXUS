@@ -10,7 +10,7 @@ function base64ToBytes(value: string) {
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 export async function hashPassword(password: string, salt = crypto.randomUUID()) {
-  const iterations = 210000;
+  const iterations = 100000;
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: encoder.encode(salt), iterations, hash: 'SHA-256' }, key, 256);
   return `pbkdf2$${iterations}$${salt}$${bytesToBase64(new Uint8Array(bits))}`;
