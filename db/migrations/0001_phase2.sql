@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS company_access_sessions (
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   company_id TEXT,
-  actor_type TEXT NOT NULL CHECK (actor_type IN ('platform','company')),
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('platform_user','company_user','system')),
   actor_platform_user_id TEXT,
   actor_company_user_id TEXT,
   action TEXT NOT NULL,

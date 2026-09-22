@@ -148,6 +148,7 @@ async function activeCompanyAdmin(
       SELECT
         cu.id,
         cu.username,
+        NULL AS display_name,
         cu.employee_id,
         cu.status
       FROM company_users cu
@@ -707,8 +708,7 @@ app.patch(
           UPDATE company_access_requests
           SET
             status='revoked',
-            revoked_at=CURRENT_TIMESTAMP,
-            updated_at=CURRENT_TIMESTAMP
+            revoked_at=CURRENT_TIMESTAMP
           WHERE company_id=?
             AND status='pending'
         `)
@@ -1235,8 +1235,7 @@ app.get(
         .prepare(`
           UPDATE company_access_requests
           SET
-            status='expired',
-            updated_at=CURRENT_TIMESTAMP
+            status='expired'
           WHERE id=?
             AND status='approved'
         `)
@@ -1390,8 +1389,7 @@ app.post(
             status='approved',
             approved_at=CURRENT_TIMESTAMP,
             approved_by=?,
-            expires_at=?,
-            updated_at=CURRENT_TIMESTAMP
+            expires_at=?
           WHERE id=?
         `)
         .bind(
@@ -1426,8 +1424,7 @@ app.post(
           SET
             status='rejected',
             rejected_at=CURRENT_TIMESTAMP,
-            approved_by=?,
-            updated_at=CURRENT_TIMESTAMP
+            approved_by=?
           WHERE id=?
         `)
         .bind(
@@ -1540,8 +1537,7 @@ app.post(
           UPDATE company_access_requests
           SET
             status='revoked',
-            revoked_at=CURRENT_TIMESTAMP,
-            updated_at=CURRENT_TIMESTAMP
+            revoked_at=CURRENT_TIMESTAMP
           WHERE id=?
             AND status='approved'
         `)

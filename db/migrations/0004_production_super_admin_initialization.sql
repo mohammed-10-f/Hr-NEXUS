@@ -10,7 +10,7 @@ ALTER TABLE platform_users ADD COLUMN must_change_password INTEGER NOT NULL DEFA
 -- username: superadmin
 -- temporary password: Mm123456
 -- Password is stored only as a PBKDF2 hash compatible with src/server/auth/crypto.ts.
-INSERT INTO platform_users(
+INSERT OR IGNORE INTO platform_users(
   id, username, display_name, password_hash, must_change_password, status
 ) VALUES (
   'platform-super-admin-initial',
@@ -19,15 +19,7 @@ INSERT INTO platform_users(
   'pbkdf2$100000$b04ee84e-1d95-4ea4-b288-b97062f11e48$MHUUtxXoPYz8NO+6PtrPIeOqAnZ9RdJsUk8E8An/HjU=',
   1,
   'active'
-)
-ON CONFLICT(username) DO UPDATE SET
-  display_name=excluded.display_name,
-  password_hash=excluded.password_hash,
-  must_change_password=1,
-  status='active',
-  failed_login_count=0,
-  locked_until=NULL,
-  updated_at=CURRENT_TIMESTAMP;
+);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_users_username
   ON platform_users(username);

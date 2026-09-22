@@ -8,7 +8,7 @@ Phase 2 implements the real authentication and multi-tenant foundation against t
 - Company tenants with unique identifiers.
 - Company users bound to exactly one company.
 - Employee username = ID/identifier supplied by the company; no nationality assumption.
-- Secure PBKDF2 password hashing (210,000 iterations, SHA-256).
+- Secure PBKDF2 password hashing (100,000 iterations, SHA-256), matching the deployed Cloudflare Workers runtime.
 - First-login password change.
 - Server-side sessions using HttpOnly/Secure/SameSite cookies.
 - Session revocation and expiry.
