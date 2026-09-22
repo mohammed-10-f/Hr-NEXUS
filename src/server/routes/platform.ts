@@ -13,7 +13,7 @@ const companySchema=z.object({
   companyIdentifier:z.string().trim().regex(/^[A-Za-z0-9_-]{2,32}$/),
   legalName:z.string().trim().min(2).max(200),
   displayName:z.string().trim().min(2).max(200),
-  managementStatus:z.enum(['active','inactive']).default('active')
+  status:z.enum(['active','suspended','archived']).default('active')
 });
 const adminSchema=z.object({
   username:z.string().trim().min(1).max(128),
