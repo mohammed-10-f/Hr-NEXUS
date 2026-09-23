@@ -20,8 +20,7 @@ function cookie(c: Context<Env>, name: string, value: string, maxAge: number) {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; ${secure?'Secure; ':''}SameSite=Lax; Max-Age=${Math.floor(maxAge / 1000)}`;
 }
 function appendCookie(c: Context<Env>, value: string) {
-  const existing = c.res.headers.get('Set-Cookie');
-  c.header('Set-Cookie', existing ? `${existing}, ${value}` : value);
+  c.header('Set-Cookie', value, { append: true });
 }
 export async function createPlatformSession(c: Context<Env>, platformUserId: string) {
   const raw = `${crypto.randomUUID()}${crypto.randomUUID()}`;

@@ -770,22 +770,6 @@ app.post(
       );
     }
 
-    const existing =
-      await activeCompanyAdmin(
-        c,
-        c.req.param('companyId')
-      );
-
-    if (existing) {
-      return c.json(
-        {
-          error:
-            'ACTIVE_COMPANY_ADMIN_EXISTS'
-        },
-        409
-      );
-    }
-
     const userId =
       crypto.randomUUID();
 
@@ -924,6 +908,138 @@ app.post(
   }
 );
 
+
+/* =========================================================
+   COMPANY USER MANAGEMENT
+   ========================================================= */
+
+app.get(
+  '/companies/:companyId/users',
+  requireSuperAdmin,
+  async c => {
+    const companyId = c.req.param('companyId');
+    const company = await companyById(c, companyId);
+    if (!company) return c.json({ error: 'COMPANY_NOT_FOUND' }, 404);
+
+    const rows = await c.env.DB.prepare(`
+      SELECT
+        cu.id,
+        cu.username,
+        cu.employee_id,
+        cu.must_change_password,
+        cu.status,
+        cu.last_login_at,
+        cu.failed_login_count,
+        cu.created_at,
+        GROUP_CONCAT(r.code) AS roles
+      FROM company_users cu
+      LEFT JOIN user_roles ur ON ur.company_user_id=cu.id
+      LEFT JOIN roles r ON r.id=ur.role_id
+      WHERE cu.company_id=?
+      GROUP BY cu.id
+      ORDER BY cu.created_at DESC
+    `).bind(companyId).all<any>();
+
+    return c.json({
+      items: rows.results.map((u:any) => ({
+        ...u,
+        must_change_password: Boolean(u.must_change_password),
+        roles: u.roles ? String(u.roles).split(',') : []
+      }))
+    });
+  }
+);
+
+const updateCompanyUserSchema = z.object({
+  username: z.string().trim().min(1).max(128).optional(),
+  employeeId: z.string().trim().max(128).nullable().optional(),
+  status: z.enum(['active','inactive','locked']).optional()
+}).refine(v => Object.keys(v).length > 0, { message: 'EMPTY_UPDATE' });
+
+app.patch(
+  '/companies/:companyId/users/:userId',
+  requireSuperAdmin,
+  async c => {
+    const companyId = c.req.param('companyId');
+    const userId = c.req.param('userId');
+    const parsed = updateCompanyUserSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'INVALID_INPUT' }, 400);
+
+    const company = await companyById(c, companyId);
+    if (!company) return c.json({ error: 'COMPANY_NOT_FOUND' }, 404);
+
+    const before = await c.env.DB.prepare(`
+      SELECT id,username,employee_id,status
+      FROM company_users
+      WHERE id=? AND company_id=?
+    `).bind(userId, companyId).first<any>();
+    if (!before) return c.json({ error: 'COMPANY_USER_NOT_FOUND' }, 404);
+
+    const fields:string[]=[];
+    const values:any[]=[];
+    if (parsed.data.username !== undefined) { fields.push('username=?'); values.push(parsed.data.username); }
+    if (parsed.data.employeeId !== undefined) { fields.push('employee_id=?'); values.push(parsed.data.employeeId); }
+    if (parsed.data.status !== undefined) { fields.push('status=?'); values.push(parsed.data.status); }
+    fields.push('updated_at=CURRENT_TIMESTAMP');
+    values.push(userId);
+
+    try {
+      await c.env.DB.prepare(`UPDATE company_users SET ${fields.join(',')} WHERE id=?`).bind(...values).run();
+      if (parsed.data.status && parsed.data.status !== 'active') {
+        await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE session_type='company' AND company_user_id=? AND revoked_at IS NULL`).bind(userId).run();
+      }
+    } catch (err) {
+      const message=String(err);
+      if (message.includes('UNIQUE')) return c.json({ error: 'USERNAME_EXISTS' }, 409);
+      console.error('COMPANY_USER_UPDATE_FAILED', err);
+      return c.json({ error: 'COMPANY_USER_UPDATE_FAILED' }, 500);
+    }
+
+    await audit(c, 'company_user_update', 'company_user', userId, {
+      companyId,
+      before,
+      after: parsed.data
+    });
+    return c.json({ ok:true });
+  }
+);
+
+const resetPasswordSchema = z.object({
+  newPassword: z.string().min(8).max(256)
+});
+
+app.post(
+  '/companies/:companyId/users/:userId/reset-password',
+  requireSuperAdmin,
+  async c => {
+    const companyId = c.req.param('companyId');
+    const userId = c.req.param('userId');
+    const parsed = resetPasswordSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: 'INVALID_INPUT' }, 400);
+
+    const user = await c.env.DB.prepare(`
+      SELECT id,username,status
+      FROM company_users
+      WHERE id=? AND company_id=?
+    `).bind(userId, companyId).first<any>();
+    if (!user) return c.json({ error: 'COMPANY_USER_NOT_FOUND' }, 404);
+
+    try {
+      await c.env.DB.prepare(`
+        UPDATE company_users
+        SET password_hash=?,must_change_password=1,failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND company_id=?
+      `).bind(await hashPassword(parsed.data.newPassword), userId, companyId).run();
+      await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE session_type='company' AND company_user_id=? AND revoked_at IS NULL`).bind(userId).run();
+    } catch (err) {
+      console.error('COMPANY_USER_PASSWORD_RESET_FAILED', err);
+      return c.json({ error: 'PASSWORD_RESET_FAILED' }, 500);
+    }
+
+    await audit(c, 'company_user_password_reset', 'company_user', userId, { companyId });
+    return c.json({ ok:true, mustChangePassword:true });
+  }
+);
 
 /* =========================================================
    SUPER ADMIN COMPANY ACCESS REQUEST
