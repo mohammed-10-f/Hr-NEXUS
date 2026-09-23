@@ -35,9 +35,17 @@ export function AppShell(){
  async function logout(){
   if(busyAction)return;
   setBusyAction('logout');
-  try{await api('/api/auth/logout',{method:'POST'});setCtx(null);navigate('/login',{replace:true});}
-  catch{setError(true);}
-  finally{setBusyAction(null);}
+  try{
+    await api('/api/auth/logout',{method:'POST'});
+  }catch{
+    // The local navigation must still complete even if the server-side revoke
+    // request fails. The login screen is the safe recovery point.
+  }finally{
+    setCtx(null);
+    setError(false);
+    setBusyAction(null);
+    navigate('/login',{replace:true});
+  }
  }
  async function exitCompany(){
   if(busyAction)return;

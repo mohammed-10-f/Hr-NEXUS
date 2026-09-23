@@ -51,8 +51,15 @@ export async function createCompanyAccessSession(c: Context<Env>, requestId: str
 }
 export async function revokeCurrentSession(c: Context<Env>) {
   const raw = getCookie(c.req.header('Cookie'), SESSION_COOKIE);
-  if (raw) await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE token_hash=?`).bind(await sha256(raw)).run();
+  if (raw) {
+    await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE token_hash=?`).bind(await sha256(raw)).run();
+  }
+  const accessRaw = getCookie(c.req.header('Cookie'), ACCESS_COOKIE);
+  if (accessRaw) {
+    await c.env.DB.prepare(`UPDATE company_access_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE token_hash=? AND revoked_at IS NULL`).bind(await sha256(accessRaw)).run();
+  }
   appendCookie(c, cookie(c,SESSION_COOKIE,'',0));
+  appendCookie(c, cookie(c,ACCESS_COOKIE,'',0));
 }
 export async function revokeCompanyAccess(c: Context<Env>) {
   const raw = getCookie(c.req.header('Cookie'), ACCESS_COOKIE);
