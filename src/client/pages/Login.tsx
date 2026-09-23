@@ -1,8 +1,10 @@
 import { FormEvent, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Building2, LockKeyhole, UserRound, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api';
 
 export function Login(){
+  const navigate=useNavigate();
   const [mode,setMode]=useState<'company'|'platform'>('company');
   const [companyId,setCompanyId]=useState(''); const [loginIdentifier,setLoginIdentifier]=useState('');
   const [username,setUsername]=useState(''); const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
@@ -10,7 +12,7 @@ export function Login(){
     e.preventDefault();setBusy(true);setError('');
     try{
       const result=await api<any>(mode==='company'?'/api/auth/login':'/api/auth/platform-login',{method:'POST',body:JSON.stringify(mode==='company'?{companyId,loginIdentifier,password}:{username,password})});
-      window.location.assign(result?.session?.mustChangePassword?'/change-password':'/');
+      navigate(result?.session?.mustChangePassword?'/change-password':'/',{replace:true});
     }catch(err){
       const code=err instanceof Error?err.message:'';
       setError(code==='ACCOUNT_LOCKED'?'الحساب مقفل مؤقتًا.':code==='COMPANY_INACTIVE'?'الشركة غير نشطة حاليًا.':'بيانات الدخول غير صحيحة أو الحساب غير متاح.');

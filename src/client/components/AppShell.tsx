@@ -12,10 +12,21 @@ const companyNav=[
   {label:'الإشعارات',to:'#',icon:Bell},{label:'الإعدادات',to:'#',icon:Settings}
 ];
 export function AppShell(){
- const [open,setOpen]=useState(false),[expanded,setExpanded]=useState<string[]>(['الموظفون']),[ctx,setCtx]=useState<any>(null),[error,setError]=useState(false),[busyAction,setBusyAction]=useState<'logout'|'exit'|null>(null);
+ const [open,setOpen]=useState(false),[expanded,setExpanded]=useState<string[]>(['الموظفون']),[ctx,setCtx]=useState<any>(null),[error,setError]=useState(false),[retryKey,setRetryKey]=useState(0),[busyAction,setBusyAction]=useState<'logout'|'exit'|null>(null);
  const location=useLocation(),navigate=useNavigate();
- useEffect(()=>{api<any>('/api/context').then(setCtx).catch(()=>setError(true))},[location.pathname]);
- useEffect(()=>{if(error)navigate('/login')},[error,navigate]);
+ useEffect(()=>{
+   let alive=true;
+   setError(false);
+   api<any>('/api/context')
+     .then(value=>{if(alive)setCtx(value)})
+     .catch(err=>{
+       if(!alive)return;
+       if(err instanceof Error && err.message==='AUTH_REQUIRED') navigate('/login',{replace:true});
+       else setError(true);
+     });
+   return()=>{alive=false};
+ },[location.pathname,navigate,retryKey]);
+ if(error) return <div className="panel-empty"><h3>تعذر تحميل الجلسة</h3><p>تعذر الاتصال بجلسة المستخدم. أعد المحاولة.</p><button className="login-submit" onClick={()=>{setError(false);setRetryKey(v=>v+1)}}>إعادة المحاولة</button></div>;
  if(!ctx) return <div className="panel-empty">جاري التحقق من الجلسة...</div>;
  const s=ctx.session, platform=Boolean(s.platformUserId), inCompany=s.accessMode==='super_admin_company_access'||s.accessMode==='company_user';
  const nav=platform&&!inCompany?[{label:'الرئيسية',to:'/',icon:LayoutDashboard},{label:'الشركات',to:'/platform/companies',icon:Building2},{label:'سجل التدقيق',to:'#',icon:FileText}]:s.roles?.includes('company_admin')?[...companyNav,{label:'طلبات دخول مدير المنصة',to:'/access-requests',icon:ShieldCheck}]:companyNav;
