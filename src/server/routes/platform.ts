@@ -1027,7 +1027,7 @@ app.post(
     try {
       await c.env.DB.prepare(`
         UPDATE company_users
-        SET password_hash=?,must_change_password=1,failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP
+        SET password_hash=?,must_change_password=1,status='active',failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP
         WHERE id=? AND company_id=?
       `).bind(await hashPassword(parsed.data.newPassword), userId, companyId).run();
       await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE session_type='company' AND company_user_id=? AND revoked_at IS NULL`).bind(userId).run();

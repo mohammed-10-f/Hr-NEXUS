@@ -30,13 +30,18 @@ app.post('/login',async c=>{
   if(!parsed.success) return c.json({error:'INVALID_INPUT'},400);
   const {companyId,loginIdentifier,password}=parsed.data;
   const user=await c.env.DB.prepare(`
-    SELECT cu.id,cu.company_id,cu.employee_id,cu.password_hash,cu.status,cu.must_change_password,cu.failed_login_count,cu.locked_until,
+    SELECT cu.id,cu.company_id,cu.username,cu.employee_id,cu.password_hash,cu.status,cu.must_change_password,cu.failed_login_count,cu.locked_until,
       c.status company_status,c.company_identifier,c.display_name,c.legal_name
     FROM company_users cu JOIN companies c ON c.id=cu.company_id
-    WHERE c.company_identifier=? AND cu.username=? LIMIT 1`)
-    .bind(companyId,loginIdentifier).first<any>();
-  if(!user || user.company_status!=='active' || await locked(user.status,user.locked_until) || !(await verifyPassword(password,user.password_hash))){
-    if(user && user.company_status==='active' && user.status==='active') await failCompany(c,user);
+    WHERE LOWER(c.company_identifier)=LOWER(?)
+      AND (LOWER(cu.username)=LOWER(?) OR (cu.employee_id IS NOT NULL AND LOWER(cu.employee_id)=LOWER(?)))
+    LIMIT 1`)
+    .bind(companyId,loginIdentifier,loginIdentifier).first<any>();
+  if(!user) return c.json({error:'INVALID_CREDENTIALS'},401);
+  if(user.company_status!=='active') return c.json({error:'COMPANY_INACTIVE'},403);
+  if(await locked(user.status,user.locked_until)) return c.json({error:'ACCOUNT_LOCKED'},423);
+  if(!(await verifyPassword(password,user.password_hash))){
+    await failCompany(c,user);
     return c.json({error:'INVALID_CREDENTIALS'},401);
   }
   const session=await createCompanySession(c,user.id);

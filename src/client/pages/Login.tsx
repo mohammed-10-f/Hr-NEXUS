@@ -9,9 +9,12 @@ export function Login(){
   async function submit(e:FormEvent){
     e.preventDefault();setBusy(true);setError('');
     try{
-      await api(mode==='company'?'/api/auth/login':'/api/auth/platform-login',{method:'POST',body:JSON.stringify(mode==='company'?{companyId,loginIdentifier,password}:{username,password})});
-      window.location.href='/';
-    }catch{setError('بيانات الدخول غير صحيحة أو الحساب غير متاح.')}
+      const result=await api<any>(mode==='company'?'/api/auth/login':'/api/auth/platform-login',{method:'POST',body:JSON.stringify(mode==='company'?{companyId,loginIdentifier,password}:{username,password})});
+      window.location.assign(result?.session?.mustChangePassword?'/change-password':'/');
+    }catch(err){
+      const code=err instanceof Error?err.message:'';
+      setError(code==='ACCOUNT_LOCKED'?'الحساب مقفل مؤقتًا.':code==='COMPANY_INACTIVE'?'الشركة غير نشطة حاليًا.':'بيانات الدخول غير صحيحة أو الحساب غير متاح.');
+    }
     finally{setBusy(false)}
   }
   return <div className="login-page"><div className="login-panel">
