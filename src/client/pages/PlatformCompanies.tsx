@@ -1,12 +1,30 @@
 import { useEffect, useState } from 'react';
 import { Building2, LogIn, Plus, Search, ShieldCheck, X, LoaderCircle, CheckCircle2, Clock3, AlertCircle, LogOut, Trash2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { ErrorState } from '../components/State';
 import { api } from '../lib/api';
 type Company={id:string;company_identifier:string;legal_name:string;display_name:string;management_status:'active'|'inactive';has_company_admin:number};
 export function PlatformCompanies(){
-  const [items,setItems]=useState<Company[]>([]),[loading,setLoading]=useState(true),[reason,setReason]=useState('متابعة ودعم الشركة'),[search,setSearch]=useState(''),[status,setStatus]=useState('');
+  const navigate=useNavigate();
+  const [items,setItems]=useState<Company[]>([]),[loading,setLoading]=useState(true),[pageError,setPageError]=useState(false),[reason,setReason]=useState('متابعة ودعم الشركة'),[search,setSearch]=useState(''),[status,setStatus]=useState('');
+  const [security,setSecurity]=useState<'logout-all'|'clean'|null>(null);
+  const [securityBusy,setSecurityBusy]=useState(false),[securityError,setSecurityError]=useState(''),[currentPassword,setCurrentPassword]=useState(''),[cleanConfirmation,setCleanConfirmation]=useState('');
  const [request,setRequest]=useState<{company:Company;id:string;state:'pending'|'approved'|'rejected'|'expired'|'revoked'|'error'}|null>(null);
-  async function load(){setLoading(true);try{const q=new URLSearchParams();if(search)q.set('search',search);if(status)q.set('status',status);setItems((await api<{items:Company[]}>(`/api/platform/companies${q.toString()?`?${q}`:''}`)).items)}finally{setLoading(false)}}
+  async function load(){
+    setLoading(true);
+    setPageError(false);
+    try{
+      const q=new URLSearchParams();
+      if(search)q.set('search',search);
+      if(status)q.set('status',status);
+      const result=await api<{items:Company[]}>(`/api/platform/companies${q.toString()?`?${q}`:''}`);
+      setItems(Array.isArray(result.items)?result.items:[]);
+    }catch{
+      setPageError(true);
+    }finally{
+      setLoading(false);
+    }
+  }
   useEffect(()=>{const t=setTimeout(load,250);return()=>clearTimeout(t)},[search,status]);
   async function enter(company:Company){
     if(request)return;
@@ -34,13 +52,13 @@ export function PlatformCompanies(){
   return <div><div className="page-header"><div><div className="eyebrow">إدارة المنصة</div><h1>الشركات</h1><p>إدارة الشركات والوصول المؤقت إلى بيئاتها.</p></div><div className="header-actions">
         <div className="header-status"><ShieldCheck size={16}/> مدير المنصة</div>
         <button className="btn secondary" onClick={()=>{setSecurity('logout-all');setSecurityError('')}}><LogOut size={15}/> تسجيل الخروج للجميع</button>
-        <button className="btn danger" onClick={()=>{setSecurity('clean');setSecurityError('');setCurrentPassword('')}}><Trash2 size={15}/> تنظيف جميع البيانات</button>
+        <button className="btn danger" onClick={()=>{setSecurity('clean');setSecurityError('');setCurrentPassword('');setCleanConfirmation('')}}><Trash2 size={15}/> تنظيف جميع البيانات</button>
         <Link className="btn primary" to="/platform/companies/new"><Plus size={16}/> إضافة شركة</Link>
       </div></div>
     <section className="panel"><div className="panel-head"><div><h3>الشركات المسجلة</h3><p>هوية مدير المنصة مستقلة عن أي شركة.</p></div></div>
       <div className="filter-bar"><div className="search-field"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="البحث باسم الشركة أو المعرّف"/></div><div className="filter-select"><span>الحالة</span><select value={status} onChange={e=>setStatus(e.target.value)}><option value="">الكل</option><option value="active">نشطة</option><option value="inactive">غير نشطة</option></select></div></div>
       <div className="access-reason"><label>سبب الدخول <input value={reason} onChange={e=>setReason(e.target.value)} /></label></div>
-      {loading?<div className="panel-empty">جاري تحميل الشركات...</div>:items.length===0?<div className="panel-empty">لا توجد شركات مطابقة.</div>:
+      {loading?<div className="panel-empty">جاري تحميل الشركات...</div>:pageError?<ErrorState/>:items.length===0?<div className="panel-empty">لا توجد شركات مطابقة.</div>:
       <div className="table-wrap"><table><thead><tr><th>الشركة</th><th>المعرّف</th><th>الحالة</th><th>مدير الشركة</th><th>الإدارة</th><th>الدخول</th></tr></thead><tbody>{items.map(c=><tr key={c.id}><td><strong>{c.display_name}</strong><div>{c.legal_name}</div></td><td className="mono">{c.company_identifier}</td><td><span className={`badge ${c.management_status==='active'?'success':'danger'}`}>{c.management_status==='active'?'نشطة':'غير نشطة'}</span></td><td>{c.has_company_admin?'مفعّل':'لا يوجد'}</td><td><Link className="table-link" to={`/platform/companies/${c.id}`}>التفاصيل</Link></td><td><button disabled={c.management_status!=='active'} className="table-link" onClick={()=>enter(c)}><LogIn size={15}/> دخول للشركة</button></td></tr>)}</tbody></table></div>}
     </section>
     {security&&<div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -56,7 +74,7 @@ export function PlatformCompanies(){
               setSecurityBusy(true);setSecurityError('');
               try{
                 await api('/api/platform/security/logout-all',{method:'POST'});
-                window.location.replace('/login');
+                navigate('/login',{replace:true});
               }catch(err){setSecurityError(err instanceof Error?err.message:'تعذر تنفيذ العملية');setSecurityBusy(false);}
             }}>{securityBusy?'جارٍ التنفيذ...':'تسجيل الخروج للجميع'}</button>
           </div>
@@ -68,18 +86,17 @@ export function PlatformCompanies(){
             <input type="password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} autoFocus />
           </label>
           <label className="security-field">اكتب CLEAN_ALL_DATA للتأكيد
-            <input id="clean-confirmation" type="text" placeholder="CLEAN_ALL_DATA" />
+            <input id="clean-confirmation" type="text" placeholder="CLEAN_ALL_DATA" value={cleanConfirmation} onChange={e=>setCleanConfirmation(e.target.value)} />
           </label>
           {securityError&&<div className="login-error">{securityError}</div>}
           <div className="security-actions">
             <button className="btn secondary" disabled={securityBusy} onClick={()=>setSecurity(null)}>إلغاء</button>
             <button className="btn danger" disabled={securityBusy||!currentPassword} onClick={async()=>{
-              const confirmation=(document.getElementById('clean-confirmation') as HTMLInputElement)?.value||'';
-              if(confirmation!=='CLEAN_ALL_DATA'){setSecurityError('يجب كتابة CLEAN_ALL_DATA كما هو.');return;}
+              if(cleanConfirmation!=='CLEAN_ALL_DATA'){setSecurityError('يجب كتابة CLEAN_ALL_DATA كما هو.');return;}
               setSecurityBusy(true);setSecurityError('');
               try{
-                await api('/api/platform/security/clean-all-data',{method:'POST',body:JSON.stringify({currentPassword,confirmation})});
-                setSecurity(null);setCurrentPassword('');await load();
+                await api('/api/platform/security/clean-all-data',{method:'POST',body:JSON.stringify({currentPassword,confirmation:cleanConfirmation})});
+                setSecurity(null);setCurrentPassword('');setCleanConfirmation('');await load();
               }catch(err){setSecurityError(err instanceof Error&&err.message==='INVALID_CREDENTIALS'?'كلمة مرور Super Admin غير صحيحة.':'تعذر تنفيذ تنظيف البيانات.');}
               finally{setSecurityBusy(false);}
             }}>{securityBusy?'جارٍ التنظيف...':'تنظيف جميع البيانات'}</button>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Component, type ErrorInfo, type ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
@@ -15,8 +15,18 @@ import { AccessRequests } from './pages/AccessRequests';
 import { PlatformCompanyForm } from './pages/PlatformCompanyForm';
 import { PlatformCompanyDetails } from './pages/PlatformCompanyDetails';
 import './styles.css';
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRouter><Routes>
+
+class AppErrorBoundary extends Component<{children:ReactNode},{hasError:boolean}> {
+  state={hasError:false};
+  static getDerivedStateFromError(){return {hasError:true};}
+  componentDidCatch(error:unknown, info:ErrorInfo){console.error('HR_NEXUS_FRONTEND_ERROR',error,info);}
+  render(){
+    if(this.state.hasError) return <div className="panel-empty"><h3>تعذر عرض الصفحة</h3><p>حدث خطأ غير متوقع في الواجهة. أعد المحاولة دون فقدان جلسة المستخدم.</p><button className="login-submit" onClick={()=>this.setState({hasError:false})}>إعادة المحاولة</button></div>;
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById('root')!).render(<AppErrorBoundary><React.StrictMode><BrowserRouter><Routes>
 <Route path="/login" element={<Login/>}/><Route path="/change-password" element={<ChangePassword/>}/><Route element={<AppShell/>}>
 <Route path="/" element={<Dashboard/>}/><Route path="/platform" element={<PlatformCompanies/>}/><Route path="/platform/companies" element={<PlatformCompanies/>}/><Route path="/platform/companies/new" element={<PlatformCompanyForm/>}/><Route path="/platform/companies/:id" element={<PlatformCompanyDetails/>}/><Route path="/access-requests" element={<AccessRequests/>}/>
 <Route path="/employees" element={<Employees/>}/><Route path="/employees/new" element={<NewEmployee/>}/><Route path="/employees/:id" element={<EmployeeProfile/>}/><Route path="/organization" element={<Organization/>}/><Route path="*" element={<ComingSoon/>}/>
-</Route></Routes></BrowserRouter></React.StrictMode>);
+</Route></Routes></BrowserRouter></React.StrictMode></AppErrorBoundary>);

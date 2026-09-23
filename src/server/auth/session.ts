@@ -79,7 +79,7 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
     SELECT s.id,s.platform_user_id,pu.display_name,pu.status,pu.must_change_password,
       s.expires_at,COALESCE(s.last_activity_at,s.created_at,CURRENT_TIMESTAMP) AS last_activity_at
     FROM sessions s JOIN platform_users pu ON pu.id=s.platform_user_id
-    WHERE s.session_type='platform' AND s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>CURRENT_TIMESTAMP AND pu.status='active'
+    WHERE s.session_type='platform' AND s.token_hash=? AND s.revoked_at IS NULL AND datetime(s.expires_at)>CURRENT_TIMESTAMP AND pu.status='active'
   `).bind(tokenHash).first<{id:string;platform_user_id:string;display_name:string;status:string;must_change_password:number;expires_at:string}>();
   if (platform) {
     if (Date.now()-new Date(platform.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(platform.id).run(); return null; }
@@ -99,7 +99,7 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
           c.company_identifier,c.display_name,c.legal_name,c.status
         FROM company_access_sessions cas JOIN companies c ON c.id=cas.company_id
         WHERE cas.token_hash=? AND cas.super_admin_user_id=? AND cas.revoked_at IS NULL
-          AND cas.expires_at>CURRENT_TIMESTAMP AND c.status='active'
+          AND datetime(cas.expires_at)>CURRENT_TIMESTAMP AND c.status='active'
       `).bind(accessHash,platform.platform_user_id).first<{id:string;company_id:string;request_id:string|null;expires_at:string;last_activity_at:string;company_identifier:string;display_name:string;legal_name:string;status:string}>();
       if (access) {
         if (Date.now()-new Date(access.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE company_access_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(access.id).run(); if(access.request_id) await c.env.DB.prepare(`UPDATE company_access_requests SET status='revoked',revoked_at=CURRENT_TIMESTAMP WHERE id=? AND status='approved'`).bind(access.request_id).run(); await audit(c,'company_access_ended','company',access.company_id,{requestId:access.request_id,reason:'inactivity'}); return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:Boolean(platform.must_change_password)}; }
@@ -115,7 +115,7 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
       cu.employee_id,cu.must_change_password,cu.status,
       c.company_identifier,c.display_name,c.legal_name,c.status AS company_status
     FROM sessions s JOIN company_users cu ON cu.id=s.company_user_id JOIN companies c ON c.id=cu.company_id
-    WHERE s.session_type='company' AND s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>CURRENT_TIMESTAMP
+    WHERE s.session_type='company' AND s.token_hash=? AND s.revoked_at IS NULL AND datetime(s.expires_at)>CURRENT_TIMESTAMP
       AND cu.status='active' AND c.status='active'
   `).bind(tokenHash).first<{id:string;company_user_id:string;company_id:string;employee_id:string|null;must_change_password:number;company_identifier:string;display_name:string;legal_name:string;company_status:string}>();
   if (!company) return null;
