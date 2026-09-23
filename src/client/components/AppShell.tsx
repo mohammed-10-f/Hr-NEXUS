@@ -16,16 +16,33 @@ export function AppShell(){
  const location=useLocation(),navigate=useNavigate();
  useEffect(()=>{
    let alive=true;
+   let timer:number|undefined;
+   let attempts=0;
    setError(false);
-   api<any>('/api/context')
-     .then(value=>{if(alive)setCtx(value)})
-     .catch(err=>{
+   const load=async()=>{
+     attempts+=1;
+     try{
+       const value=await api<any>('/api/context');
+       if(alive){setCtx(value);setError(false);}
+     }catch(err){
        if(!alive)return;
-       if(err instanceof Error && err.message==='AUTH_REQUIRED') navigate('/login',{replace:true});
-       else setError(true);
-     });
-   return()=>{alive=false};
- },[location.pathname,navigate,retryKey]);
+       if(err instanceof Error && err.message==='AUTH_REQUIRED'){
+         setCtx(null);
+         navigate('/login',{replace:true});
+         return;
+       }
+       // A newly-created session can take a moment to become visible to the
+       // next request. Retry a few times before showing a real error state.
+       if(attempts<4){
+         timer=window.setTimeout(load,250*attempts);
+         return;
+       }
+       setError(true);
+     }
+   };
+   void load();
+   return()=>{alive=false;if(timer)window.clearTimeout(timer)};
+ },[navigate,retryKey]);
  if(error) return <div className="panel-empty"><h3>تعذر تحميل الجلسة</h3><p>تعذر الاتصال بجلسة المستخدم. أعد المحاولة.</p><button className="login-submit" onClick={()=>{setError(false);setRetryKey(v=>v+1)}}>إعادة المحاولة</button></div>;
  if(!ctx) return <div className="panel-empty">جاري التحقق من الجلسة...</div>;
  const s=ctx.session, platform=Boolean(s.platformUserId), inCompany=s.accessMode==='super_admin_company_access'||s.accessMode==='company_user';

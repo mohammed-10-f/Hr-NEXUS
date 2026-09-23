@@ -49,6 +49,9 @@ export async function createCompanyAccessSession(c: Context<Env>, requestId: str
   c.header('Set-Cookie', cookie(c,ACCESS_COOKIE, raw, ACCESS_TTL));
   return { id, expiresAt };
 }
+// Revokes the server session and expires both auth cookies.
+// Cookie headers are appended independently so browsers do not parse two
+// Set-Cookie values as one combined cookie.
 export async function revokeCurrentSession(c: Context<Env>) {
   const raw = getCookie(c.req.header('Cookie'), SESSION_COOKIE);
   if (raw) {
