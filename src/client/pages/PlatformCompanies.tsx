@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Building2, LogIn, Plus, Search, ShieldCheck, X, LoaderCircle, CheckCircle2, Clock3, AlertCircle } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Building2, LogIn, Plus, Search, ShieldCheck, X, LoaderCircle, CheckCircle2, Clock3, AlertCircle, LogOut, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 type Company={id:string;company_identifier:string;legal_name:string;display_name:string;management_status:'active'|'inactive';has_company_admin:number};
 export function PlatformCompanies(){
@@ -12,7 +12,7 @@ export function PlatformCompanies(){
     if(request)return;
     try{
       const r=await api<any>(`/api/platform/companies/${company.id}/access-request`,{method:'POST',body:JSON.stringify({reason})});
-      if(r.status==='approved'){window.location.assign('/');return}
+      if(r.status==='approved'){navigate('/',{replace:true});return}
       const id=r.requestId;
       setRequest({company,id,state:'pending'});
       let stopped=false;
@@ -21,7 +21,7 @@ export function PlatformCompanies(){
         try{
           const x=await api<any>(`/api/platform/access-requests/${id}`);
           const state=x.request.status as any;
-          if(state==='approved'){stopped=true;setRequest(v=>v?{...v,state:'approved'}:v);setTimeout(()=>window.location.assign('/'),500);return}
+          if(state==='approved'){stopped=true;setRequest(v=>v?{...v,state:'approved'}:v);setTimeout(()=>navigate('/',{replace:true}),500);return}
           if(['rejected','expired','revoked'].includes(state)){stopped=true;setRequest(v=>v?{...v,state}:v);return}
         }catch{}
         if(!stopped)setTimeout(poll,2000);
@@ -31,13 +31,62 @@ export function PlatformCompanies(){
     }catch(err){setRequest({company,id:'',state:'error'});}
   }
   function closeRequest(){setRequest(null)}
-  return <div><div className="page-header"><div><div className="eyebrow">إدارة المنصة</div><h1>الشركات</h1><p>إدارة الشركات والوصول المؤقت إلى بيئاتها.</p></div><div className="header-actions"><div className="header-status"><ShieldCheck size={16}/> مدير المنصة</div><Link className="btn primary" to="/platform/companies/new"><Plus size={16}/> إضافة شركة</Link></div></div>
+  return <div><div className="page-header"><div><div className="eyebrow">إدارة المنصة</div><h1>الشركات</h1><p>إدارة الشركات والوصول المؤقت إلى بيئاتها.</p></div><div className="header-actions">
+        <div className="header-status"><ShieldCheck size={16}/> مدير المنصة</div>
+        <button className="btn secondary" onClick={()=>{setSecurity('logout-all');setSecurityError('')}}><LogOut size={15}/> تسجيل الخروج للجميع</button>
+        <button className="btn danger" onClick={()=>{setSecurity('clean');setSecurityError('');setCurrentPassword('')}}><Trash2 size={15}/> تنظيف جميع البيانات</button>
+        <Link className="btn primary" to="/platform/companies/new"><Plus size={16}/> إضافة شركة</Link>
+      </div></div>
     <section className="panel"><div className="panel-head"><div><h3>الشركات المسجلة</h3><p>هوية مدير المنصة مستقلة عن أي شركة.</p></div></div>
       <div className="filter-bar"><div className="search-field"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="البحث باسم الشركة أو المعرّف"/></div><div className="filter-select"><span>الحالة</span><select value={status} onChange={e=>setStatus(e.target.value)}><option value="">الكل</option><option value="active">نشطة</option><option value="inactive">غير نشطة</option></select></div></div>
       <div className="access-reason"><label>سبب الدخول <input value={reason} onChange={e=>setReason(e.target.value)} /></label></div>
       {loading?<div className="panel-empty">جاري تحميل الشركات...</div>:items.length===0?<div className="panel-empty">لا توجد شركات مطابقة.</div>:
       <div className="table-wrap"><table><thead><tr><th>الشركة</th><th>المعرّف</th><th>الحالة</th><th>مدير الشركة</th><th>الإدارة</th><th>الدخول</th></tr></thead><tbody>{items.map(c=><tr key={c.id}><td><strong>{c.display_name}</strong><div>{c.legal_name}</div></td><td className="mono">{c.company_identifier}</td><td><span className={`badge ${c.management_status==='active'?'success':'danger'}`}>{c.management_status==='active'?'نشطة':'غير نشطة'}</span></td><td>{c.has_company_admin?'مفعّل':'لا يوجد'}</td><td><Link className="table-link" to={`/platform/companies/${c.id}`}>التفاصيل</Link></td><td><button disabled={c.management_status!=='active'} className="table-link" onClick={()=>enter(c)}><LogIn size={15}/> دخول للشركة</button></td></tr>)}</tbody></table></div>}
     </section>
+    {security&&<div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="access-modal security-modal">
+        <button className="modal-close" onClick={()=>{if(!securityBusy)setSecurity(null)}} aria-label="إغلاق"><X size={18}/></button>
+        {security==='logout-all'?<>
+          <div className="modal-icon pending"><LogOut size={24}/></div>
+          <h3>تسجيل الخروج للجميع</h3>
+          <p>سيتم إنهاء جميع جلسات المستخدمين الحالية، بما فيها جلسة مدير المنصة. لن يتم حذف أي حساب أو بيانات.</p>
+          <div className="security-actions">
+            <button className="btn secondary" disabled={securityBusy} onClick={()=>setSecurity(null)}>إلغاء</button>
+            <button className="btn primary" disabled={securityBusy} onClick={async()=>{
+              setSecurityBusy(true);setSecurityError('');
+              try{
+                await api('/api/platform/security/logout-all',{method:'POST'});
+                window.location.replace('/login');
+              }catch(err){setSecurityError(err instanceof Error?err.message:'تعذر تنفيذ العملية');setSecurityBusy(false);}
+            }}>{securityBusy?'جارٍ التنفيذ...':'تسجيل الخروج للجميع'}</button>
+          </div>
+        </>:<>
+          <div className="modal-icon danger"><Trash2 size={24}/></div>
+          <h3>تنظيف جميع البيانات</h3>
+          <p>هذه عملية حذف شاملة. سيتم حذف الشركات والمستخدمين والموظفين والهيكل والصلاحيات المخصصة وطلبات الدخول والجلسات وسجل التدقيق. سيتم الإبقاء على حساب Super Admin الحالي وكتالوج الصلاحيات النظامية فقط.</p>
+          <label className="security-field">كلمة مرور Super Admin الحالية
+            <input type="password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} autoFocus />
+          </label>
+          <label className="security-field">اكتب CLEAN_ALL_DATA للتأكيد
+            <input id="clean-confirmation" type="text" placeholder="CLEAN_ALL_DATA" />
+          </label>
+          {securityError&&<div className="login-error">{securityError}</div>}
+          <div className="security-actions">
+            <button className="btn secondary" disabled={securityBusy} onClick={()=>setSecurity(null)}>إلغاء</button>
+            <button className="btn danger" disabled={securityBusy||!currentPassword} onClick={async()=>{
+              const confirmation=(document.getElementById('clean-confirmation') as HTMLInputElement)?.value||'';
+              if(confirmation!=='CLEAN_ALL_DATA'){setSecurityError('يجب كتابة CLEAN_ALL_DATA كما هو.');return;}
+              setSecurityBusy(true);setSecurityError('');
+              try{
+                await api('/api/platform/security/clean-all-data',{method:'POST',body:JSON.stringify({currentPassword,confirmation})});
+                setSecurity(null);setCurrentPassword('');await load();
+              }catch(err){setSecurityError(err instanceof Error&&err.message==='INVALID_CREDENTIALS'?'كلمة مرور Super Admin غير صحيحة.':'تعذر تنفيذ تنظيف البيانات.');}
+              finally{setSecurityBusy(false);}
+            }}>{securityBusy?'جارٍ التنظيف...':'تنظيف جميع البيانات'}</button>
+          </div>
+        </>}
+      </div>
+    </div>}
     {request&&<div className="modal-backdrop" role="dialog" aria-modal="true">
       <div className="access-modal">
         <button className="modal-close" onClick={closeRequest} aria-label="إغلاق"><X size={18}/></button>

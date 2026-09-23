@@ -9,6 +9,12 @@ import platform from './server/routes/platform';
 import context from './server/routes/context';
 
 const app=new Hono<Env>();
+
+app.onError((err,c)=>{
+  console.error('HR_NEXUS_UNHANDLED_ERROR',err);
+  if(c.req.path.startsWith('/api/')) return c.json({error:'SERVER_ERROR'},500);
+  return c.text('Internal Server Error',500);
+});
 app.use('*',securityHeaders);
 app.use('/api/*',loadSession);
 app.get('/api/health',(c)=>c.json({ok:true,service:'hr-nexus',phase:2}));

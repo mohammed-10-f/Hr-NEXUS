@@ -8,8 +8,22 @@ app.get('/',requireAuthentication,async c=>{
   if(s.activeCompanyId && !company){
     company=await c.env.DB.prepare(`SELECT id,company_identifier,display_name,legal_name,status FROM companies WHERE id=?`).bind(s.activeCompanyId).first<any>() as any;
   }
-  const notifications=s.companyUserId && s.activeCompanyId ? await c.env.DB.prepare(`SELECT id,title_ar,body_ar,type,read_at,created_at FROM notifications WHERE company_id=? AND user_id=? ORDER BY created_at DESC LIMIT 10`).bind(s.activeCompanyId,s.companyUserId).all() : {results:[]};
-  return c.json({session:s,company,notifications:notifications.results});
+  let notificationResults:any[]=[];
+  if(s.companyUserId && s.activeCompanyId){
+    try{
+      const notifications=await c.env.DB.prepare(`
+        SELECT id,title_ar,body_ar,type,read_at,created_at
+        FROM notifications
+        WHERE company_id=? AND user_id=?
+        ORDER BY created_at DESC
+        LIMIT 10
+      `).bind(s.activeCompanyId,s.companyUserId).all();
+      notificationResults=notifications.results;
+    }catch(err){
+      console.error('CONTEXT_NOTIFICATIONS_FAILED',err);
+    }
+  }
+  return c.json({session:s,company,notifications:notificationResults});
 });
 app.post('/notifications/:id/read',requireAuthentication,async c=>{
   const s=c.get('session'); if(!s?.companyUserId||!s.activeCompanyId) return c.json({error:'FORBIDDEN'},403);

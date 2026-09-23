@@ -76,7 +76,8 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
   if (!raw) return null;
   const tokenHash = await sha256(raw);
   const platform = await c.env.DB.prepare(`
-    SELECT s.id,s.platform_user_id,pu.display_name,pu.status,pu.must_change_password, s.expires_at,s.last_activity_at
+    SELECT s.id,s.platform_user_id,pu.display_name,pu.status,pu.must_change_password,
+      s.expires_at,COALESCE(s.last_activity_at,s.created_at,CURRENT_TIMESTAMP) AS last_activity_at
     FROM sessions s JOIN platform_users pu ON pu.id=s.platform_user_id
     WHERE s.session_type='platform' AND s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>CURRENT_TIMESTAMP AND pu.status='active'
   `).bind(tokenHash).first<{id:string;platform_user_id:string;display_name:string;status:string;must_change_password:number;expires_at:string}>();
@@ -93,7 +94,9 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
         await audit(c,'company_access_expired','company',expiredAccess.company_id,{requestId:expiredAccess.request_id});
       }
       const access = await c.env.DB.prepare(`
-        SELECT cas.id,cas.company_id,cas.request_id,cas.expires_at,cas.last_activity_at,c.company_identifier,c.display_name,c.legal_name,c.status
+        SELECT cas.id,cas.company_id,cas.request_id,cas.expires_at,
+          COALESCE(cas.last_activity_at,cas.started_at,CURRENT_TIMESTAMP) AS last_activity_at,
+          c.company_identifier,c.display_name,c.legal_name,c.status
         FROM company_access_sessions cas JOIN companies c ON c.id=cas.company_id
         WHERE cas.token_hash=? AND cas.super_admin_user_id=? AND cas.revoked_at IS NULL
           AND cas.expires_at>CURRENT_TIMESTAMP AND c.status='active'
@@ -107,7 +110,9 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
     return {sessionId:platform.id,sessionType:'platform',platformUserId:platform.platform_user_id,companyUserId:null,activeCompanyId:null,accessMode:'platform',roles:['super_admin'],employeeId:null,mustChangePassword:Boolean(platform.must_change_password)};
   }
   const company = await c.env.DB.prepare(`
-    SELECT s.id,s.company_user_id,cu.company_id,s.last_activity_at,cu.employee_id,cu.must_change_password,cu.status,
+    SELECT s.id,s.company_user_id,cu.company_id,
+      COALESCE(s.last_activity_at,s.created_at,CURRENT_TIMESTAMP) AS last_activity_at,
+      cu.employee_id,cu.must_change_password,cu.status,
       c.company_identifier,c.display_name,c.legal_name,c.status AS company_status
     FROM sessions s JOIN company_users cu ON cu.id=s.company_user_id JOIN companies c ON c.id=cu.company_id
     WHERE s.session_type='company' AND s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>CURRENT_TIMESTAMP

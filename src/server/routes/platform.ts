@@ -12,7 +12,7 @@ import {
   revokeCompanyAccess
 } from '../auth/session';
 import { audit } from '../audit';
-import { hashPassword, sha256 } from '../auth/crypto';
+import { hashPassword, sha256, verifyPassword } from '../auth/crypto';
 import { hasPermission } from '../authorization';
 
 const app = new Hono<Env>();
@@ -1673,6 +1673,123 @@ app.post(
 
     return c.json({
       ok: true
+    });
+  }
+);
+
+
+/* =========================================================
+   PLATFORM SECURITY CONTROLS
+   ========================================================= */
+
+/*
+ * Logs every user out without deleting accounts or business data.
+ * The Super Admin can then sign in again normally.
+ */
+app.post(
+  '/security/logout-all',
+  requireSuperAdmin,
+  async c => {
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        UPDATE sessions
+        SET revoked_at=CURRENT_TIMESTAMP
+        WHERE revoked_at IS NULL
+      `),
+      c.env.DB.prepare(`
+        UPDATE company_access_sessions
+        SET revoked_at=CURRENT_TIMESTAMP
+        WHERE revoked_at IS NULL
+      `)
+    ]);
+
+    await audit(
+      c,
+      'logout_all',
+      'security',
+      null,
+      { scope: 'all_sessions' }
+    );
+
+    return c.json({ ok:true });
+  }
+);
+
+/*
+ * Destructive reset:
+ * - keeps the platform Super Admin account
+ * - keeps the system permission catalogue
+ * - removes companies, company users, roles, employees,
+ *   organization data, notifications, access requests,
+ *   sessions and audit history
+ * - removes any other platform user
+ *
+ * A password + exact confirmation phrase are required.
+ */
+const cleanAllDataSchema=z.object({
+  currentPassword:z.string().min(1).max(256),
+  confirmation:z.literal('CLEAN_ALL_DATA')
+});
+
+app.post(
+  '/security/clean-all-data',
+  requireSuperAdmin,
+  async c => {
+    const s=c.get('session')!;
+    const current=await c.env.DB.prepare(`
+      SELECT id,username,password_hash,status
+      FROM platform_users
+      WHERE id=?
+      LIMIT 1
+    `).bind(s.platformUserId).first<any>();
+
+    if(!current || current.username!=='superadmin' || current.status!=='active'){
+      return c.json({error:'SUPER_ADMIN_REQUIRED'},403);
+    }
+
+    const parsed=cleanAllDataSchema.safeParse(
+      await c.req.json().catch(()=>null)
+    );
+    if(!parsed.success) return c.json({error:'INVALID_CONFIRMATION'},400);
+
+    if(!(await verifyPassword(parsed.data.currentPassword,current.password_hash))){
+      return c.json({error:'INVALID_CREDENTIALS'},401);
+    }
+
+    const preservedSessionId=s.sessionId;
+
+    /*
+     * Delete in FK-safe order. Permissions are system definitions,
+     * so they remain available for future companies.
+     */
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM notifications`),
+      c.env.DB.prepare(`DELETE FROM user_permissions`),
+      c.env.DB.prepare(`DELETE FROM user_roles`),
+      c.env.DB.prepare(`DELETE FROM role_permissions`),
+      c.env.DB.prepare(`DELETE FROM company_access_sessions`),
+      c.env.DB.prepare(`DELETE FROM company_access_requests`),
+      c.env.DB.prepare(`DELETE FROM sessions WHERE id<>?`).bind(preservedSessionId),
+      c.env.DB.prepare(`DELETE FROM audit_logs`),
+      c.env.DB.prepare(`DELETE FROM employees`),
+      c.env.DB.prepare(`DELETE FROM organization_units`),
+      c.env.DB.prepare(`DELETE FROM company_users`),
+      c.env.DB.prepare(`DELETE FROM roles`),
+      c.env.DB.prepare(`DELETE FROM companies`),
+      c.env.DB.prepare(`DELETE FROM platform_users WHERE id<>?`).bind(current.id)
+    ]);
+
+    /*
+     * The audit trail was intentionally cleared as part of the reset.
+     * Keep the database clean; the Super Admin account itself remains.
+     */
+    return c.json({
+      ok:true,
+      preserved:{
+        superAdmin:true,
+        systemPermissions:true,
+        currentSession:true
+      }
     });
   }
 );
