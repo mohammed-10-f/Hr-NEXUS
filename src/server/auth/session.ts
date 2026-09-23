@@ -121,6 +121,6 @@ export async function loadSessionContext(c: Context<Env>): Promise<SessionContex
   if (!company) return null;
   if (Date.now()-new Date(company.last_activity_at).getTime()>INACTIVITY_TTL) { await c.env.DB.prepare(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=?`).bind(company.id).run(); return null; }
   await c.env.DB.prepare(`UPDATE sessions SET last_activity_at=CURRENT_TIMESTAMP WHERE id=?`).bind(company.id).run();
-  const roles = await c.env.DB.prepare(`SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.company_user_id=?`).bind(company.company_user_id).all<{code:string}>();
+  const roles = await c.env.DB.prepare(`SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.status='active' WHERE ur.company_user_id=?`).bind(company.company_user_id).all<{code:string}>();
   return {sessionId:company.id,sessionType:'company',platformUserId:null,companyUserId:company.company_user_id,activeCompanyId:company.company_id,accessMode:'company_user',roles:roles.results.map(r=>r.code),employeeId:company.employee_id,mustChangePassword:Boolean(company.must_change_password),company:{id:company.company_id,companyIdentifier:company.company_identifier,displayName:company.display_name,legalName:company.legal_name,status:company.company_status}};
 }

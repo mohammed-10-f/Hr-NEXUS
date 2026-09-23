@@ -19,3 +19,19 @@
 .security-actions{display:flex;justify-content:flex-start;gap:8px;margin-top:18px}
 .btn.danger{background:#a52838;border-color:#a52838;color:#fff}
 .btn.danger:hover{background:#8f2030}
+
+/* Phase 3: users / roles / permissions */
+.wide-modal{max-width:980px;max-height:90vh;overflow:auto}
+.form-section{margin-top:18px;padding-top:16px;border-top:1px solid var(--border,#e5e7eb)}
+.form-section>strong{display:block;margin-bottom:12px}
+.check-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:var(--surface,#fff);cursor:pointer}
+.check-row input{accent-color:currentColor}
+.permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.permission-editor{border:1px solid var(--border,#e5e7eb);border-radius:10px;padding:8px}
+.permission-editor .check-row{border:0;padding:2px;background:transparent}
+.permission-editor .check-row span{display:flex;flex-direction:column;gap:3px}
+.permission-editor small{font-size:11px;opacity:.65}
+.scope-inline{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border,#e5e7eb)}
+.permission-list{display:flex;flex-direction:column;gap:7px;max-height:300px;overflow:auto}
+.permission-row{display:grid;grid-template-columns:1.2fr 1.4fr auto auto;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border,#e5e7eb);border-radius:9px}
+@media(max-width:760px){.permission-grid{grid-template-columns:1fr}.scope-inline{grid-template-columns:1fr}.permission-row{grid-template-columns:1fr}.wide-modal{width:calc(100vw - 24px)}}

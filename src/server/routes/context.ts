@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../env';
 import { requireAuthentication } from '../middleware/session';
+import { resolvePermissions } from '../authorization';
 const app=new Hono<Env>();
 app.get('/',requireAuthentication,async c=>{
   const s=c.get('session')!;
@@ -23,7 +24,8 @@ app.get('/',requireAuthentication,async c=>{
       console.error('CONTEXT_NOTIFICATIONS_FAILED',err);
     }
   }
-  return c.json({session:s,company,notifications:notificationResults});
+  const permissions = s.companyUserId ? await resolvePermissions(c) : [];
+  return c.json({session:s,company,notifications:notificationResults,permissions:permissions.map(p=>p.permissionId)});
 });
 app.post('/notifications/:id/read',requireAuthentication,async c=>{
   const s=c.get('session'); if(!s?.companyUserId||!s.activeCompanyId) return c.json({error:'FORBIDDEN'},403);

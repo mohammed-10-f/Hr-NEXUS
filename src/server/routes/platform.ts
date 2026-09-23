@@ -159,6 +159,7 @@ async function activeCompanyAdmin(
       WHERE cu.company_id=?
         AND cu.status='active'
         AND r.code='company_admin'
+        AND r.status='active'
       LIMIT 1
     `)
     .bind(companyId)
@@ -229,6 +230,7 @@ app.get(
           WHERE cu.company_id=c.id
             AND cu.status='active'
             AND r.code='company_admin'
+            AND r.status='active'
         ) AS has_company_admin
 
       FROM companies c
