@@ -63,7 +63,7 @@ UPDATE company_users SET employee_id='${ids.empB}' WHERE id='${ids.userB}';
 const file=path.join(os.tmpdir(),`hr-nexus-seed-${now}.sql`);
 fs.writeFileSync(file,sql);
 try{
-  const flags=['d1','execute','hr-nexu',remote?'--remote':'--local',`--file=${file}`];
+  const flags=['d1','execute','hr-nexus',remote?'--remote':'--local',`--file=${file}`];
   execFileSync(process.platform==='win32'?'npx.cmd':'npx',['wrangler',...flags],{stdio:'inherit'});
   console.log(`Seeded Phase 2 test data. Test password: ${password}`);
   console.log('Super Admin: superadmin');

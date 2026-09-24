@@ -1,10 +1,7 @@
 -- HR Nexus production hardening: platform Super Admin initialization.
--- Idempotent: safe to apply once to an existing Phase 2 database.
+-- Idempotent: safe to apply once to an existing Phase 2 database. The column is part of the foundation schema so this migration never performs a duplicate ALTER.
 -- Does not create a company and does not attach the platform user to a tenant.
 PRAGMA foreign_keys = ON;
-
-ALTER TABLE platform_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0
-  CHECK (must_change_password IN (0,1));
 
 -- Initial platform credentials:
 -- username: superadmin

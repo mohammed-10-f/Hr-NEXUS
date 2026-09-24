@@ -7,11 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "db:migrate:local": "wrangler d1 migrations apply hr-nexu --local",
-    "db:migrate:remote": "wrangler d1 migrations apply hr-nexu --remote",
-    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run typecheck && npm run build && npm run db:migrate:remote && wrangler deploy",
     "db:seed:test": "node scripts/seed-test-data.mjs",
-    "db:seed:test:remote": "node scripts/seed-test-data.mjs --remote"
+    "db:seed:test:remote": "node scripts/seed-test-data.mjs --remote",
+    "db:migrations:list:local": "wrangler d1 migrations list DB --local"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.3",

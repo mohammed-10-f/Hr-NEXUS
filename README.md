@@ -1,6 +1,6 @@
 # HR Nexus — Phase 2
 
-Phase 2 implements the real authentication and multi-tenant foundation against the existing Cloudflare D1 database **hr-nexu**. The approved Phase 1 visual system is retained.
+Phase 2 implements the real authentication and multi-tenant foundation against the existing Cloudflare D1 database **hr-nexus**. The approved Phase 1 visual system is retained.
 
 ## Scope implemented
 
@@ -27,11 +27,39 @@ Phase 2 implements the real authentication and multi-tenant foundation against t
 
 This repository targets only:
 
-- Database: `hr-nexu`
+- Database: `hr-nexus`
 - Database ID: `6010e3ea-b8a7-44a6-bf79-bb45bdcba837`
 - Binding: `DB`
 
 Do not create or delete another D1 database.
+
+## Database migrations and deployment
+
+All production schema changes belong in `db/migrations/` as versioned SQL migrations. Wrangler records applied migrations in D1's migration history, so an already-applied migration is not executed again. Cloudflare D1 applies pending migrations transactionally and rolls back a failed migration.
+
+The deployment pipeline in `.github/workflows/deploy.yml` runs, in order:
+
+1. install dependencies
+2. typecheck
+3. build
+4. apply pending remote D1 migrations
+5. deploy the Worker
+
+Required GitHub repository secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+The API token must be stored only in GitHub Secrets and scoped to the required Cloudflare account/resources. No Cloudflare credentials are committed to the repository.
+
+For local development:
+
+```bash
+npm run db:migrate:local
+```
+
+For production, do not run SQL manually in the Cloudflare dashboard. Add a new numbered migration under `db/migrations/` and push to `main`; the deployment workflow applies only the pending migrations before deploying the Worker.
+
 
 ## Local setup
 
@@ -42,7 +70,7 @@ npm run build
 npm run db:migrate:local
 ```
 
-For a real remote D1 migration, only after confirming the target is the intended `hr-nexu` database:
+For a real remote D1 migration, only after confirming the target is the intended `hr-nexus` database:
 
 ```bash
 npm run db:migrate:remote

@@ -1,6 +1,6 @@
 # HR Nexus — A-Z delivery note
 
-This package is aligned with the currently observed `hr-nexu` D1 schema.
+This package is aligned with the currently observed `hr-nexus` D1 schema.
 
 Critical fixes included:
 - Platform audit actor type now uses the live allowed values (`platform_user`, `company_user`, `system`).

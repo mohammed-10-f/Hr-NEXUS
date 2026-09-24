@@ -35,7 +35,7 @@
 
 The uploaded project does not contain Cloudflare credentials, and this execution environment could not reach/install Wrangler dependencies. Therefore the real remote Cloudflare D1 database and deployed Worker could not be executed from here.
 
-The following must therefore remain UNVERIFIED until run against the real `hr-nexu` D1 database:
+The following must therefore remain UNVERIFIED until run against the real `hr-nexus` D1 database:
 - remote migration application
 - live `superadmin / Mm123456` login
 - live mandatory password change
@@ -50,7 +50,7 @@ Do not label those live tests PASS until they are executed against the configure
 
 ## Compatibility corrections in this delivery
 
-The application layer is now compatible with the currently observed `hr-nexu` D1 schema without requiring the optional `0002_company_management.sql` columns:
+The application layer is now compatible with the currently observed `hr-nexus` D1 schema without requiring the optional `0002_company_management.sql` columns:
 
 - Company lifecycle is read from `companies.status`; the API exposes a compatibility alias as `management_status` for the existing Arabic UI.
 - Company access request updates no longer reference `company_access_requests.updated_at`, because that column is not present in the current remote schema.

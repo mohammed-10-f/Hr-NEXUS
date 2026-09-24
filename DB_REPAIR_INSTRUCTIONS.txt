@@ -1,18 +1,14 @@
-HR NEXUS - CURRENT D1 REPAIR
+HR NEXUS - D1 MIGRATION POLICY
 
-The current remote database already contains the must_change_password column.
-Run db/repair_superadmin.sql ONCE against the existing hr-nexu D1 database.
-Do NOT run the 0004 migration against this database if Cloudflare reports it as pending and the column already exists; first reconcile migration history/schema rather than forcing it.
+The project now targets the existing Cloudflare D1 database:
+- Database: hr-nexus
+- Binding: DB
 
-After the repair, verify:
-username=superadmin
-status=active
-must_change_password=1
-failed_login_count=0
-locked_until=NULL
-password_hash starts with pbkdf2$100000$
+Do not execute ad-hoc SQL in the Cloudflare dashboard for normal schema changes.
 
-Then deploy this project. Initial login:
-superadmin / Mm123456
+All future schema changes must be added as a new numbered migration under:
+db/migrations/
 
-The Worker now creates new password hashes with PBKDF2 100000 iterations, which is supported by the deployed Cloudflare Workers runtime.
+The deployment workflow applies pending migrations automatically before deploying the Worker. Wrangler records applied migrations in D1's migration history, and a migration that fails is rolled back rather than marked complete.
+
+The former one-off Super Admin repair SQL has been archived under db/migrations_archive/ and is not part of deployment. It must not be used as a recurring deployment step.

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS platform_users (
   username TEXT NOT NULL UNIQUE,
   display_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0,1)),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive','locked')),
   last_login_at TEXT,
   failed_login_count INTEGER NOT NULL DEFAULT 0,
