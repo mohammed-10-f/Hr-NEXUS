@@ -18,5 +18,19 @@ INSERT OR IGNORE INTO platform_users(
   'active'
 );
 
+-- INSERT OR IGNORE protects a fresh database, but an existing row with the
+-- same username must also be repaired if it was inactive or had stale state.
+-- This update intentionally resets the initial temporary credential only when
+-- this production initialization migration is applied.
+UPDATE platform_users
+SET display_name='مدير المنصة',
+    password_hash='pbkdf2$100000$b04ee84e-1d95-4ea4-b288-b97062f11e48$MHUUtxXoPYz8NO+6PtrPIeOqAnZ9RdJsUk8E8An/HjU=',
+    must_change_password=1,
+    status='active',
+    failed_login_count=0,
+    locked_until=NULL,
+    updated_at=CURRENT_TIMESTAMP
+WHERE username='superadmin';
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_users_username
   ON platform_users(username);
