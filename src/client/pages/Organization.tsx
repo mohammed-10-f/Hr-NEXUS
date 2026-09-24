@@ -22,7 +22,7 @@ export function Organization(){
  function unitHasMatch(u:Unit):boolean{if(matches(`${u.name_ar} ${u.name_en||''} ${u.code||''}`))return true;return (children.get(u.id)||[]).some(unitHasMatch)}
  function positionHasMatch(p:Position){return matches(`${p.title_ar} ${p.title_en||''} ${p.code||''} ${p.organization_unit_name}`)}
  function collectAncestors(id:string,set:Set<string>){const unit=units.find(u=>u.id===id);if(!unit?.parent_id)return;set.delete(unit.parent_id);collectAncestors(unit.parent_id,set)}
- useEffect(()=>{if(!search)return;const next=new Set(collapsed);for(const u of units){if(unitHasMatch(u))continue;next.add(u.id)};for(const p of positions){if(positionHasMatch(p)){const unit=units.find(u=>u.id===p.organization_unit_id);if(unit)collectAncestors(unit.id,next)}}setCollapsed(next)},[search,units,positions]);
+ useEffect(()=>{if(!search)return;const next=new Set<string>(collapsed);for(const u of units){if(unitHasMatch(u))continue;next.add(u.id)};for(const p of positions){if(positionHasMatch(p)){const unit=units.find(u=>u.id===p.organization_unit_id);if(unit)collectAncestors(unit.id,next)}}setCollapsed(next)},[search,units,positions]);
  function toggleUnit(id:string){setCollapsed(prev=>{const next=new Set(prev);next.has(id)?next.delete(id):next.add(id);return next})}
  function expandAll(){setCollapsed(new Set())}
  function collapseAll(){setCollapsed(new Set(units.filter(u=>(children.get(u.id)||[]).length>0).map(u=>u.id)))}
@@ -38,11 +38,11 @@ export function Organization(){
    return <div className="org-chart-node">
      <article className={`org-node-card ${directMatch&&search?'search-hit':''} ${unit.active?'':'is-inactive'}`}>
        <div className="org-node-topline"><span className="org-node-level">{unit.level_name||'وحدة تنظيمية'}</span><span className="org-node-code">{unit.code||'—'}</span></div>
-       <div className="org-node-title-row"><span className="org-node-icon"><Building2 size={17}/></span><div className="org-node-title"><strong>{unit.name_ar}</strong>{unit.name_en&&<small>{unit.name_en}</small>}</div><button className="org-node-toggle" title={isCollapsed?'توسيع':'طي'} onClick={()=>toggleUnit(unit.id)} disabled={!kids.length}>{kids.length?<ChevronDown size={16}/>:<span className="org-no-children"/>}</button></div>
+       <div className="org-node-title-row"><span className="org-node-icon"><Building2 size={17}/></span><div className="org-node-title"><strong>{unit.name_ar}</strong>{unit.name_en&&<small>{unit.name_en}</small>}</div><button className={`org-node-toggle ${isCollapsed?'is-collapsed':''}`} title={isCollapsed?'توسيع':'طي'} onClick={()=>toggleUnit(unit.id)} disabled={!kids.length}>{kids.length?<ChevronDown size={16}/>:<span className="org-no-children"/>}</button></div>
        <div className="org-node-footer"><span>{kids.length} وحدة فرعية</span><span>{unit.position_count} منصب</span><div className="org-node-actions"><button className="icon-btn compact" title="تعديل الوحدة" onClick={()=>openUnit(unit)}><Edit3 size={14}/></button><button className="icon-btn compact" title="إضافة وحدة فرعية" onClick={()=>openUnit(undefined,unit.id)}><Plus size={14}/></button></div></div>
        {nodePositions.length>0&&<div className="org-node-positions">{nodePositions.slice(0,3).map(p=><span key={p.id} className={`org-mini-position ${p.status}`}><UserCog size={12}/>{p.title_ar}</span>)}{nodePositions.length>3&&<span className="org-mini-more">+{nodePositions.length-3}</span>}</div>}
      </article>
-     {!isCollapsed&&kids.length>0&&<div className="org-children-grid">{kids.map((k,i)=><div className="org-child-branch" key={k.id}><span className="org-branch-stem"/><Node unit={k}/></div>)}</div>}
+     {!isCollapsed&&kids.length>0&&<div className="org-tree-children">{kids.map(k=><div className="org-tree-child" key={k.id}><Node unit={k}/></div>)}</div>}
    </div>
  }
  return <div><div className="page-header"><div><div className="eyebrow">الهيكل المؤسسي</div><h1>الهيكل التنظيمي</h1><p>هيكل هرمي فعلي من بيانات الشركة، مع وحدات ومناصب وعلاقات إدارية.</p></div><div className="header-actions"><button className="btn secondary" onClick={()=>window.location.href='/api/organization/export'}><Download size={16}/> تصدير</button><button className="btn secondary" onClick={()=>openUnit()}><Plus size={16}/> وحدة تنظيمية</button><button className="btn primary" onClick={()=>openPosition()} disabled={!units.some(u=>u.active)}><Plus size={16}/> منصب</button></div></div>
