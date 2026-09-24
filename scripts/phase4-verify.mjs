@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const read=p=>fs.readFileSync(p,'utf8');
+const migration=read('db/migrations/0006_phase4_organization_structure.sql');
+const route=read('src/server/routes/organization.ts');
+const page=read('src/client/pages/Organization.tsx');
+const shell=read('src/client/components/AppShell.tsx');
+for(const needle of ['CREATE TABLE IF NOT EXISTS positions','organization.create','organization.edit','organization.move','organization.manage_positions','organization.manage_managers','organization.export','trg_org_unit_parent_company_insert','idx_positions_company_unit']) assert(migration.includes(needle),needle);
+for(const needle of ["/units", "/units/:id/move", "/positions", "/positions/:id/manager", 'WITH RECURSIVE tree', 'WITH RECURSIVE chain', 'company_id=?']) assert(route.includes(needle),needle);
+for(const needle of ['search-hit','/api/organization/export','إنشاء وحدة تنظيمية','إنشاء منصب']) assert(page.includes(needle),needle);
+assert(shell.includes("organization.view"));
+console.log('PHASE4_STATIC_CHECKS_OK');
