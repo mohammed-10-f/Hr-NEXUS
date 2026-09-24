@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ b1e41da21e7671a9c76745f82207d68a }}
+      CLOUDFLARE_API_TOKEN: ${{ cfat_igzzgpb25ramcaDKo0SVIu20skkUrW5JmKoXpFOV1e9c3fc0 }}
 
     steps:
       - name: Checkout
