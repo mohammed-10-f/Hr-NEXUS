@@ -16,6 +16,7 @@ import { PlatformCompanyForm } from './pages/PlatformCompanyForm';
 import { PlatformCompanyDetails } from './pages/PlatformCompanyDetails';
 import { Users } from './pages/Users';
 import { Roles } from './pages/Roles';
+import { EmployeeSettings } from './pages/EmployeeSettings';
 import './styles.css';
 
 class AppErrorBoundary extends Component<{children:ReactNode},{hasError:boolean}> {
@@ -30,5 +31,5 @@ class AppErrorBoundary extends Component<{children:ReactNode},{hasError:boolean}
 ReactDOM.createRoot(document.getElementById('root')!).render(<AppErrorBoundary><React.StrictMode><BrowserRouter><Routes>
 <Route path="/login" element={<Login/>}/><Route path="/change-password" element={<ChangePassword/>}/><Route element={<AppShell/>}>
 <Route path="/" element={<Dashboard/>}/><Route path="/platform" element={<PlatformCompanies/>}/><Route path="/platform/companies" element={<PlatformCompanies/>}/><Route path="/platform/companies/new" element={<PlatformCompanyForm/>}/><Route path="/platform/companies/:id" element={<PlatformCompanyDetails/>}/><Route path="/access-requests" element={<AccessRequests/>}/>
-<Route path="/employees" element={<Employees/>}/><Route path="/employees/new" element={<NewEmployee/>}/><Route path="/employees/:id" element={<EmployeeProfile/>}/><Route path="/organization" element={<Organization/>}/><Route path="/users" element={<Users/>}/><Route path="/roles" element={<Roles/>}/><Route path="*" element={<ComingSoon/>}/>
+<Route path="/employees" element={<Employees/>}/><Route path="/employees/new" element={<NewEmployee/>}/><Route path="/employees/settings" element={<EmployeeSettings/>}/><Route path="/employees/:id" element={<EmployeeProfile/>}/><Route path="/organization" element={<Organization/>}/><Route path="/users" element={<Users/>}/><Route path="/roles" element={<Roles/>}/><Route path="*" element={<ComingSoon/>}/>
 </Route></Routes></BrowserRouter></React.StrictMode></AppErrorBoundary>);

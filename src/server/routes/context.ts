@@ -27,7 +27,7 @@ app.get('/',requireAuthentication,async c=>{
   let permissionIds:string[] = [];
   if (s.companyUserId) permissionIds = (await resolvePermissions(c)).map(p=>p.permissionId);
   else if (s.accessMode === 'super_admin_company_access') {
-    const orgPermissions = await c.env.DB.prepare(`SELECT id FROM permissions WHERE resource='organization'`).all<{id:string}>();
+    const orgPermissions = await c.env.DB.prepare(`SELECT id FROM permissions WHERE resource IN ('organization','employee')`).all<{id:string}>();
     permissionIds = orgPermissions.results.map(p=>p.id);
   }
   return c.json({session:s,company,notifications:notificationResults,permissions:permissionIds});

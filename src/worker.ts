@@ -3,7 +3,7 @@ import type { Env } from './server/env';
 import { loadSession } from './server/middleware/session';
 import { securityHeaders } from './server/middleware/security';
 import auth from './server/routes/auth';
-import employees from './server/routes/employees';
+import employees, { processProbation } from './server/routes/employees';
 import organization from './server/routes/organization';
 import platform from './server/routes/platform';
 import context from './server/routes/context';
@@ -27,4 +27,7 @@ app.route('/api/organization',organization);
 app.route('/api/company',company);
 app.all('/api/*',(c)=>c.json({error:'NOT_FOUND'},404));
 app.all('*',async c=>c.env.ASSETS.fetch(c.req.raw));
-export default app;
+export default {
+  fetch: app.fetch,
+  scheduled: async (_event: any, env: Env['Bindings']) => { await processProbation(env); }
+};
