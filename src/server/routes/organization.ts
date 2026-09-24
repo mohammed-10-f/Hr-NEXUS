@@ -81,18 +81,25 @@ async function validateManager(c: any, managerPositionId: string|null, positionI
 app.get('/', async c => {
   if (!(await allowed(c,'organization.view'))) return forbidden(c);
   const cid = companyId(c);
-  const [units, stats] = await Promise.all([
+  const [units, positions, stats] = await Promise.all([
     c.env.DB.prepare(`
       SELECT ou.id,ou.parent_id,ou.name_ar,ou.name_en,ou.level_name,ou.code,ou.active,
-             COUNT(DISTINCT p.id) AS position_count,
-             SUM(CASE WHEN p.status='occupied' THEN 1 ELSE 0 END) AS occupied_count,
-             SUM(CASE WHEN p.status='vacant' THEN 1 ELSE 0 END) AS vacant_count,
-             SUM(CASE WHEN p.status='frozen' THEN 1 ELSE 0 END) AS frozen_count
+             COUNT(DISTINCT p.id) AS position_count
       FROM organization_units ou
       LEFT JOIN positions p ON p.organization_unit_id=ou.id AND p.company_id=ou.company_id
       WHERE ou.company_id=?
       GROUP BY ou.id
       ORDER BY COALESCE(ou.level_name,''),ou.name_ar
+    `).bind(cid).all(),
+    c.env.DB.prepare(`
+      SELECT p.id,p.organization_unit_id,p.title_ar,p.title_en,p.code,p.status,p.manager_position_id,
+             ou.name_ar AS organization_unit_name,
+             m.title_ar AS manager_title_ar
+      FROM positions p
+      JOIN organization_units ou ON ou.id=p.organization_unit_id AND ou.company_id=p.company_id
+      LEFT JOIN positions m ON m.id=p.manager_position_id AND m.company_id=p.company_id
+      WHERE p.company_id=?
+      ORDER BY ou.name_ar,p.title_ar
     `).bind(cid).all(),
     c.env.DB.prepare(`
       SELECT
@@ -103,31 +110,7 @@ app.get('/', async c => {
         (SELECT COUNT(*) FROM positions WHERE company_id=? AND status='frozen') AS frozen_count
     `).bind(cid,cid,cid,cid,cid).first<any>()
   ]);
-  return c.json({ units: units.results, stats });
-});
-
-app.get('/positions', async c => {
-  if (!(await allowed(c,'organization.view'))) return forbidden(c);
-  const cid=companyId(c);
-  const url=new URL(c.req.url);
-  const page=Math.max(1,Number(url.searchParams.get('page')||'1')||1);
-  const requestedPageSize=Math.max(10,Number(url.searchParams.get('pageSize')||'25')||25);
-  const pageSize=Math.min(500,requestedPageSize);
-  const offset=(page-1)*pageSize;
-  const unitId=url.searchParams.get('unitId')?.trim()||'';
-  const q=url.searchParams.get('q')?.trim()||'';
-  const status=url.searchParams.get('status')?.trim()||'';
-  const clauses=['p.company_id=?'];
-  const binds:any[]=[cid];
-  if(unitId){clauses.push('p.organization_unit_id=?');binds.push(unitId)}
-  if(status && ['vacant','occupied','frozen'].includes(status)){clauses.push('p.status=?');binds.push(status)}
-  if(q){clauses.push(`(LOWER(p.title_ar) LIKE LOWER(?) OR LOWER(COALESCE(p.title_en,'')) LIKE LOWER(?) OR LOWER(COALESCE(p.code,'')) LIKE LOWER(?) OR LOWER(ou.name_ar) LIKE LOWER(?))`);const like=`%${q}%`;binds.push(like,like,like,like)}
-  const where=clauses.join(' AND ');
-  const [rows,total]=await Promise.all([
-    c.env.DB.prepare(`SELECT p.id,p.organization_unit_id,p.title_ar,p.title_en,p.code,p.status,p.manager_position_id,ou.name_ar AS organization_unit_name,m.title_ar AS manager_title_ar FROM positions p JOIN organization_units ou ON ou.id=p.organization_unit_id AND ou.company_id=p.company_id LEFT JOIN positions m ON m.id=p.manager_position_id AND m.company_id=p.company_id WHERE ${where} ORDER BY ou.name_ar,p.title_ar LIMIT ? OFFSET ?`).bind(...binds,pageSize,offset).all(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS total FROM positions p JOIN organization_units ou ON ou.id=p.organization_unit_id AND ou.company_id=p.company_id WHERE ${where}`).bind(...binds).first<any>()
-  ]);
-  return c.json({results:rows.results,total:Number(total?.total||0),page,pageSize});
+  return c.json({ units: units.results, positions: positions.results, stats });
 });
 
 app.post('/units', async c => {
