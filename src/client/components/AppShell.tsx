@@ -52,6 +52,8 @@ export function AppShell(){
  const canManagePlatform=platform&&!inCompany;
  const canReviewAccessRequests=inCompany&&s.roles?.includes('company_admin');
  const uiPermissions=new Set<string>(ctx.permissions||[]);
+ const canWorkflowAdmin=platform&&!inCompany;
+ const canTransactions=uiPermissions.has('transaction.view')||uiPermissions.has('transaction.create')||uiPermissions.has('transaction.search');
  const canUsers=!platform && uiPermissions.has('users.view');
  const canRoles=!platform && uiPermissions.has('roles.view');
  const canOrganization=uiPermissions.has('organization.view');
@@ -60,8 +62,10 @@ export function AppShell(){
  if(canUsers) companyManagement.push({label:'المستخدمون',to:'/users',icon:Users});
  if(canRoles) companyManagement.push({label:'الأدوار والصلاحيات',to:'/roles',icon:ShieldCheck});
  const visibleCompanyNav=companyNav.map(item=>item.label==='الموظفون' ? (canEmployees ? {...item,children:item.children?.filter((child:any)=>child.to!=='/organization'||canOrganization)} : {...item,children:[]}) : item).filter(item=>item.label!=='الموظفون'||item.children?.length);
- const nav=canManagePlatform?[{label:'الرئيسية',to:'/',icon:LayoutDashboard},{label:'الشركات',to:'/platform/companies',icon:Building2},{label:'سجل التدقيق',to:'#',icon:FileText}]:[...visibleCompanyNav,...(companyManagement.length?[{label:'الإدارة',icon:ShieldCheck,children:companyManagement}]:[]),...(canReviewAccessRequests?[{label:'طلبات دخول مدير المنصة',to:'/access-requests',icon:ShieldCheck}]:[])];
- const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform/companies/new')?'إضافة شركة':location.pathname.startsWith('/platform/companies/')?'تفاصيل الشركة':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':location.pathname.startsWith('/users')?'المستخدمون':location.pathname.startsWith('/roles')?'الأدوار والصلاحيات':'HR Nexus';
+ const platformNav=[{label:'الرئيسية',to:'/',icon:LayoutDashboard},{label:'الشركات',to:'/platform/companies',icon:Building2},{label:'سير العمل',to:'/platform/workflows',icon:Workflow},{label:'سجل التدقيق',to:'#',icon:FileText}];
+ const transactionNav=canTransactions?[{label:'المعاملات',icon:Workflow,children:[{label:'قائمة المعاملات',to:'/transactions'},{label:'إنشاء معاملة',to:'/transactions/new'},{label:'البحث برقم المعاملة',to:'/transactions'}]}]:[];
+ const nav=canManagePlatform?platformNav:[...visibleCompanyNav.filter(x=>x.label!=='المعاملات'),...transactionNav,...(companyManagement.length?[{label:'الإدارة',icon:ShieldCheck,children:companyManagement}]:[]),...(canReviewAccessRequests?[{label:'طلبات دخول مدير المنصة',to:'/access-requests',icon:ShieldCheck}]:[])];
+ const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform/workflows')?'منشئ سير العمل':location.pathname.startsWith('/transactions/new')?'إنشاء معاملة':location.pathname.startsWith('/transactions')?'المعاملات':location.pathname.startsWith('/platform/companies/new')?'إضافة شركة':location.pathname.startsWith('/platform/companies/')?'تفاصيل الشركة':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':location.pathname.startsWith('/users')?'المستخدمون':location.pathname.startsWith('/roles')?'الأدوار والصلاحيات':'HR Nexus';
  const toggle=(label:string)=>setExpanded(v=>v.includes(label)?v.filter(x=>x!==label):[...v,label]);
  async function logout(){
   if(busyAction)return;
@@ -96,6 +100,8 @@ export function AppShell(){
  if(location.pathname.startsWith('/roles') && !canRoles) return <ForbiddenState/>;
  if(location.pathname.startsWith('/organization') && !canOrganization) return <ForbiddenState/>;
  if(location.pathname.startsWith('/employees') && !canEmployees) return <ForbiddenState/>;
+ if(location.pathname.startsWith('/transactions') && !canTransactions) return <ForbiddenState/>;
+ if(location.pathname.startsWith('/platform/workflows') && !canWorkflowAdmin) return <ForbiddenState/>;
  if(location.pathname.startsWith('/employees/settings') && !(uiPermissions.has('employee.manage_custom_fields')||uiPermissions.has('employee.manage_contract_types'))) return <ForbiddenState/>;
  return <div className="app-shell"><aside className={`sidebar ${open?'is-open':''}`}><div className="brand"><div className="brand-mark">N</div><div><strong>HR Nexus</strong><span>Enterprise HR Platform</span></div><button className="icon-btn mobile-only" onClick={()=>setOpen(false)}><X size={18}/></button></div>
  <nav className="nav-list">{nav.map((item:any)=>{const Icon=item.icon; if(item.children){return <div className="nav-group" key={item.label}><button className="nav-parent" onClick={()=>toggle(item.label)}><Icon size={19}/><span>{item.label}</span><ChevronLeft className={expanded.includes(item.label)?'rotated':''} size={15}/></button>{expanded.includes(item.label)&&<div className="nav-children">{item.children.map((child:any)=>child.to==='#'?<button key={child.label} className="nav-child disabled" disabled><span>{child.label}</span><em>لاحقاً</em></button>:<NavLink onClick={()=>setOpen(false)} key={child.label} className="nav-child" to={child.to}>{child.label}</NavLink>)}</div>}</div>;} if(item.to==='#'){return <button key={item.label} className="nav-parent disabled" disabled><Icon size={19}/><span>{item.label}</span><em>لاحقاً</em></button>;} return <NavLink onClick={()=>setOpen(false)} key={item.label} className="nav-parent" to={item.to}><Icon size={19}/><span>{item.label}</span></NavLink>;})}</nav>

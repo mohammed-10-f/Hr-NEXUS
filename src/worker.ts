@@ -8,6 +8,7 @@ import organization from './server/routes/organization';
 import platform from './server/routes/platform';
 import context from './server/routes/context';
 import company from './server/routes/company';
+import workflows from './server/routes/workflows';
 
 const app=new Hono<Env>();
 
@@ -25,6 +26,7 @@ app.route('/api/context',context);
 app.route('/api/employees',employees);
 app.route('/api/organization',organization);
 app.route('/api/company',company);
+app.route('/api/workflows',workflows);
 app.all('/api/*',(c)=>c.json({error:'NOT_FOUND'},404));
 app.all('*',async c=>c.env.ASSETS.fetch(c.req.raw));
 export default {
