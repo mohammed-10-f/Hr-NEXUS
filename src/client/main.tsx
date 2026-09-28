@@ -18,6 +18,8 @@ import { Users } from './pages/Users';
 import { Roles } from './pages/Roles';
 import { EmployeeSettings } from './pages/EmployeeSettings';
 import { WorkflowAdmin } from './pages/WorkflowAdmin';
+import { WorkflowTestEnvironment } from './pages/WorkflowTestEnvironment';
+import { WorkflowTestList } from './pages/WorkflowTestList';
 import { Transactions } from './pages/Transactions';
 import { NewTransaction } from './pages/NewTransaction';
 import { TransactionDetail } from './pages/TransactionDetail';
@@ -35,5 +37,5 @@ class AppErrorBoundary extends Component<{children:ReactNode},{hasError:boolean}
 ReactDOM.createRoot(document.getElementById('root')!).render(<AppErrorBoundary><React.StrictMode><BrowserRouter><Routes>
 <Route path="/login" element={<Login/>}/><Route path="/change-password" element={<ChangePassword/>}/><Route element={<AppShell/>}>
 <Route path="/" element={<Dashboard/>}/><Route path="/platform" element={<PlatformCompanies/>}/><Route path="/platform/companies" element={<PlatformCompanies/>}/><Route path="/platform/companies/new" element={<PlatformCompanyForm/>}/><Route path="/platform/companies/:id" element={<PlatformCompanyDetails/>}/><Route path="/access-requests" element={<AccessRequests/>}/>
-<Route path="/employees" element={<Employees/>}/><Route path="/employees/new" element={<NewEmployee/>}/><Route path="/employees/settings" element={<EmployeeSettings/>}/><Route path="/platform/workflows" element={<WorkflowAdmin/>}/><Route path="/transactions" element={<Transactions/>}/><Route path="/transactions/new" element={<NewTransaction/>}/><Route path="/transactions/:id" element={<TransactionDetail/>}/><Route path="/employees/:id" element={<EmployeeProfile/>}/><Route path="/organization" element={<Organization/>}/><Route path="/users" element={<Users/>}/><Route path="/roles" element={<Roles/>}/><Route path="*" element={<ComingSoon/>}/>
+<Route path="/employees" element={<Employees/>}/><Route path="/employees/new" element={<NewEmployee/>}/><Route path="/employees/settings" element={<EmployeeSettings/>}/><Route path="/platform/workflows" element={<WorkflowAdmin/>}/><Route path="/platform/workflows/test" element={<WorkflowTestList/>}/><Route path="/platform/workflows/test/:typeId" element={<WorkflowTestEnvironment/>}/><Route path="/transactions" element={<Transactions/>}/><Route path="/transactions/new" element={<NewTransaction/>}/><Route path="/transactions/:id" element={<TransactionDetail/>}/><Route path="/employees/:id" element={<EmployeeProfile/>}/><Route path="/organization" element={<Organization/>}/><Route path="/users" element={<Users/>}/><Route path="/roles" element={<Roles/>}/><Route path="*" element={<ComingSoon/>}/>
 </Route></Routes></BrowserRouter></React.StrictMode></AppErrorBoundary>);
