@@ -56,25 +56,18 @@ app.get('/admin/companies',async c=>{
   return c.json({items:rows.results});
 });
 app.post('/admin/transactions/clear',async c=>{
-  const counts=await Promise.all([
-    c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transactions`).first<any>(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transaction_types`).first<any>()
-  ]);
-  const transactionCount=Number(counts[0]?.count||0);
-  const typeCount=Number(counts[1]?.count||0);
+  const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transactions`).first<any>();
+  const transactionCount=Number(row?.count||0);
   try{
-    // Full Phase 6 transaction reset: real transactions first (children cascade),
-    // then sequences, then transaction types (their workflow configuration cascades).
-    // This intentionally preserves the database schema, companies, employees,
-    // permissions and the rest of HR Nexus.
+    // Clear only real/test transaction data. Keep Studio templates, workflows, stages,
+    // fields, questions and company copies intact so the builder is not reset.
     await c.env.DB.batch([
       c.env.DB.prepare(`DELETE FROM transactions`),
-      c.env.DB.prepare(`DELETE FROM transaction_sequences`),
-      c.env.DB.prepare(`DELETE FROM transaction_types`)
+      c.env.DB.prepare(`DELETE FROM transaction_sequences`)
     ]);
   }catch(e){return errorResponse(c,'DB-001',500,e);}
-  await audit(c,'workflow_transaction_factory_reset','transaction_engine',null,{deletedTransactions:transactionCount,deletedTransactionTypes:typeCount,scope:'all_companies',sequencesReset:true,workflowDefinitionsRemoved:true});
-  return c.json({ok:true,deletedCount:transactionCount,deletedTypeCount:typeCount});
+  await audit(c,'workflow_transaction_data_cleared','transaction_engine',null,{deletedTransactions:transactionCount,scope:'all_companies',sequencesReset:true,templatesPreserved:true});
+  return c.json({ok:true,deletedCount:transactionCount});
 });
 app.get('/admin/types',async c=>{
   const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count,(SELECT wd.version FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id AND wd.status='active' ORDER BY wd.version DESC LIMIT 1) workflow_version FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
@@ -226,9 +219,9 @@ app.post('/admin/workflows/full-template',async c=>{
     await c.env.DB.prepare(`UPDATE workflow_definitions SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE transaction_type_id=? AND status='active'`).bind(transactionTypeId).run();
     await c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) SELECT ?,?,COALESCE(MAX(version),0)+1,?,?,?,?,? FROM workflow_definitions WHERE transaction_type_id=?`).bind(workflowId,transactionTypeId,`قالب محاكاة متكامل لسير المعاملة: ${type.name_ar}`,JSON.stringify(['company_admin']), 'active',actor,actor,transactionTypeId).run();
     await c.env.DB.batch([
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s1,workflowId,'تقديم الطلب','Submit Request',1,'company_admin',null,60,JSON.stringify({employeeFeedback:false})),
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s2,workflowId,'مراجعة الطلب','Review Request',2,'company_admin',null,120,JSON.stringify({employeeFeedback:true})),
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s3,workflowId,'الاعتماد النهائي','Final Approval',3,'company_admin',null,120,JSON.stringify({employeeFeedback:false})),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s1,workflowId,'تقديم الطلب','Submit Request',1,'company_admin',null,null,JSON.stringify({employeeFeedback:false})),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s2,workflowId,'مراجعة الطلب','Review Request',2,'company_admin',null,null,JSON.stringify({employeeFeedback:true})),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s3,workflowId,'الاعتماد النهائي','Final Approval',3,'company_admin',null,null,JSON.stringify({employeeFeedback:false})),
       c.env.DB.prepare(`INSERT INTO workflow_questions(id,workflow_id,stage_id,question_key,question_ar,question_en,question_type,required,options_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,'review_approved','هل تمت الموافقة على الطلب بعد المراجعة؟','Was the request approved after review?','yes_no',1,null,1),
       c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,null,'request_title','عنوان الطلب','Request title','text',1,null,JSON.stringify({}),1),
       c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,null,'request_details','تفاصيل الطلب','Request details','textarea',0,null,JSON.stringify({}),2),
@@ -266,7 +259,7 @@ app.post('/transactions',async c=>{
     c.env.DB.prepare(`INSERT INTO transaction_stage_executions(id,transaction_id,stage_id,execution_order,started_at,due_at,status) VALUES(?,?,?,?,?,?,?)`).bind(execId,txId,first.id,1,now,due,'active'),
     ...workflow.fields.filter((f:any)=>Object.prototype.hasOwnProperty.call(d.data,f.field_key)).map((f:any)=>c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,field_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),txId,f.id,JSON.stringify(d.data[f.field_key]))),
     ...workflow.questions.filter((q:any)=>Object.prototype.hasOwnProperty.call(d.answers,q.question_key)).map((q:any)=>c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,question_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),txId,q.id,JSON.stringify(d.answers[q.question_key]))),
-    c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,to_stage_id,metadata_json) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),txId,companyId,actorId(c),'created',first.id,JSON.stringify({transactionNumber:number}))
+    c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,to_stage_id,metadata_json) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),txId,companyId,actorId(c),'created',first.id,JSON.stringify({transactionNumber:number,answersSnapshot:d.answers??{},dataSnapshot:d.data??{},stageId:first.id}))
   ]);}catch(e){return errorResponse(c,'DB-001',500,e);}await audit(c,'transaction_created','transaction',txId,{transactionNumber:number,transactionTypeId:d.transactionTypeId,stage:first.id});return c.json({ok:true,id:txId,transactionNumber:number},201);
 });
 
@@ -357,7 +350,7 @@ app.post('/transactions/:id/action',async c=>{
   let toStage:any=null;let action=d.action;if(action==='next'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='next').sort((a:any,b:any)=>a.sort_order-b.sort_order);toStage=candidates.find((x:any)=>conditionMatches(x.condition,data,answers))?.to_stage_id?workflow.stages.find((s:any)=>s.id===candidates.find((x:any)=>conditionMatches(x.condition,data,answers)).to_stage_id):null;if(!toStage)return errorResponse(c,'TRANSACTION-011',409);}else if(action==='return'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='return').sort((a:any,b:any)=>a.sort_order-b.sort_order);const selected=candidates.find((x:any)=>conditionMatches(x.condition,data,answers)&&(!d.toStageId||x.to_stage_id===d.toStageId));const target=selected?.to_stage_id?workflow.stages.find((s:any)=>s.id===selected.to_stage_id):null;if(!target || Number(target.stage_order)>=Number(currentStage.stage_order))return errorResponse(c,'TRANSACTION-011',409);toStage=target;}else if(action==='complete'||action==='reject'||action==='cancel'){const t=workflow.transitions.find((x:any)=>x.from_stage_id===exec.stage_id&&x.action===action&&x.active);if(!t)return errorResponse(c,'TRANSACTION-011',409);}
   const now=new Date().toISOString();const newStatus=action==='complete'?'مكتملة':action==='reject'?'مرفوضة':action==='cancel'?'ملغية':'قيد الإجراء';const nextExecId=toStage?crypto.randomUUID():null;let nextOrder=Number(exec.execution_order)+1;const due=toStage?.duration_minutes?new Date(Date.now()+Number(toStage.duration_minutes)*60000).toISOString():null;
   try{
-    const stmts:any[]=[c.env.DB.prepare(`UPDATE transaction_stage_executions SET completed_at=?,status=?,acted_by=?,return_reason=? WHERE id=? AND status='active'`).bind(now,action==='return'?'returned':action==='reject'?'rejected':action==='cancel'?'cancelled':'completed',actorId(c),action==='return'?(d.reason??''):null,exec.id),c.env.DB.prepare(`UPDATE transactions SET status=?,current_stage_id=?,updated_at=CURRENT_TIMESTAMP,completed_at=? WHERE id=? AND company_id=? AND status='قيد الإجراء'`).bind(newStatus,toStage?.id??null,newStatus==='قيد الإجراء'?null:now,tx.id,companyId),c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,to_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),tx.id,companyId,actorId(c),action,exec.stage_id,toStage?.id??null,d.reason??null,JSON.stringify({})),c.env.DB.prepare(`UPDATE transactions SET data_json=? WHERE id=?`).bind(JSON.stringify(data),tx.id)];
+    const stmts:any[]=[c.env.DB.prepare(`UPDATE transaction_stage_executions SET completed_at=?,status=?,acted_by=?,return_reason=? WHERE id=? AND status='active'`).bind(now,action==='return'?'returned':action==='reject'?'rejected':action==='cancel'?'cancelled':'completed',actorId(c),action==='return'?(d.reason??''):null,exec.id),c.env.DB.prepare(`UPDATE transactions SET status=?,current_stage_id=?,updated_at=CURRENT_TIMESTAMP,completed_at=? WHERE id=? AND company_id=? AND status='قيد الإجراء'`).bind(newStatus,toStage?.id??null,newStatus==='قيد الإجراء'?null:now,tx.id,companyId),c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,to_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),tx.id,companyId,actorId(c),action,exec.stage_id,toStage?.id??null,d.reason??null,JSON.stringify({answersSnapshot:d.answers??{},dataSnapshot:data,stageId:exec.stage_id})),c.env.DB.prepare(`UPDATE transactions SET data_json=? WHERE id=?`).bind(JSON.stringify(data),tx.id)];
     if(toStage)stmts.push(c.env.DB.prepare(`INSERT INTO transaction_stage_executions(id,transaction_id,stage_id,execution_order,started_at,due_at,status) VALUES(?,?,?,?,?,?,?)`).bind(nextExecId,tx.id,toStage.id,nextOrder,now,due,'active'));
     if(d.answers)for(const [key,val] of Object.entries(d.answers)){const q=workflow.questions.find((x:any)=>x.question_key===key);const f=workflow.fields.find((x:any)=>x.field_key===key);if(q)stmts.push(c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,question_id,value_json) VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),tx.id,q.id,JSON.stringify(val)));else if(f)stmts.push(c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,field_id,value_json) VALUES(?,?,?,?) ON CONFLICT DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),tx.id,f.id,JSON.stringify(val)));}
     await c.env.DB.batch(stmts);

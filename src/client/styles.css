@@ -197,3 +197,7 @@
 .workflow-step.active span{background:var(--primary);color:#fff;border-color:var(--primary)}
 .workflow-step.done span{background:var(--success);color:#fff;border-color:var(--success)}
 @media (max-width:900px){.workflow-stepper{grid-template-columns:1fr 1fr}.workflow-step{padding:10px}}
+
+.creation-stage-mode{grid-template-columns:1fr !important}.creation-stage-mode .workflow-main{grid-column:1}.creation-stage-strip{display:none}.stage-attachments-config{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:14px;align-items:end;margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-muted,#fafbfd)}
+
+.creation-stage-hero{display:none}.transaction-stage-answers{display:grid;gap:12px}.stage-answer-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--surface)}.stage-answer-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:10px}.stage-answer-head span{color:var(--muted);font-size:12px}.stage-answer-list{display:grid;gap:8px}.stage-answer-list>div{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-top:1px solid var(--border)}.stage-answer-list span{color:var(--muted)}
