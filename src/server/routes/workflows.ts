@@ -84,6 +84,85 @@ app.post('/admin/workflows',async c=>{
   }catch(e){return errorResponse(c,String(e).includes('UNIQUE')?'WORKFLOW-002':'WORKFLOW-005',400,e);}
   await audit(c,'workflow_definition_created','workflow',workflowId,{transactionTypeId:d.transactionTypeId,status:d.status,stageCount:d.stages.length});return c.json({ok:true,id:workflowId},201);
 });
+app.post('/admin/types/:id/publish',async c=>{
+  const body=await c.req.json().catch(()=>null) as any;
+  const companyIds=Array.isArray(body?.companyIds)?body.companyIds.filter((x:any)=>typeof x==='string'):[];
+  if(!companyIds.length)return errorResponse(c,'WORKFLOW-001',400);
+  const source=await c.env.DB.prepare(`SELECT * FROM transaction_types WHERE id=?`).bind(c.req.param('id')).first<any>();
+  if(!source)return errorResponse(c,'WORKFLOW-003',404);
+  const sourceWorkflow=await c.env.DB.prepare(`SELECT * FROM workflow_definitions WHERE transaction_type_id=? AND status='active' ORDER BY version DESC LIMIT 1`).bind(source.id).first<any>();
+  if(!sourceWorkflow)return errorResponse(c,'WORKFLOW-006',400);
+  const actor=actorId(c); const results:any[]=[];
+  try{
+    for(const companyId of [...new Set(companyIds)]){
+      const company=await c.env.DB.prepare(`SELECT id,display_name FROM companies WHERE id=? AND status='active'`).bind(companyId).first<any>();
+      if(!company)continue;
+      const existing=await c.env.DB.prepare(`SELECT id FROM transaction_types WHERE company_id=? AND name_ar=?`).bind(companyId,source.name_ar).first<any>();
+      if(existing){results.push({companyId,status:'exists',typeId:existing.id});continue;}
+      const newTypeId=crypto.randomUUID(), newWorkflowId=crypto.randomUUID();
+      await c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,name_en,description,status,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?)`).bind(newTypeId,companyId,source.name_ar,source.name_en??null,source.description??null,'active',actor,actor).run();
+      await c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?)`).bind(newWorkflowId,newTypeId,sourceWorkflow.version,sourceWorkflow.description??null,sourceWorkflow.allowed_submitters_json??'[]','active',actor,actor).run();
+      const stageRows=(await c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(sourceWorkflow.id).all<any>()).results;
+      const stageMap=new Map<string,string>();
+      for(const st of stageRows){const id=crypto.randomUUID();stageMap.set(st.id,id);await c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(id,newWorkflowId,st.name_ar,st.name_en??null,st.stage_order,st.responsible_type,st.responsible_value??null,st.duration_minutes??null,st.config_json??'{}',1).run();}
+      const fieldRows=(await c.env.DB.prepare(`SELECT * FROM workflow_fields WHERE workflow_id=? AND active=1 ORDER BY sort_order`).bind(sourceWorkflow.id).all<any>()).results;
+      for(const f of fieldRows){await c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),newWorkflowId,f.stage_id?stageMap.get(f.stage_id):null,f.field_key,f.label_ar,f.label_en??null,f.field_type,f.required,f.options_json??null,f.config_json??'{}',f.sort_order,1).run();}
+      const questionRows=(await c.env.DB.prepare(`SELECT * FROM workflow_questions WHERE workflow_id=? AND active=1 ORDER BY sort_order`).bind(sourceWorkflow.id).all<any>()).results;
+      for(const q of questionRows){const stageId=stageMap.get(q.stage_id);if(!stageId)continue;await c.env.DB.prepare(`INSERT INTO workflow_questions(id,workflow_id,stage_id,question_key,question_ar,question_en,question_type,required,options_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),newWorkflowId,stageId,q.question_key,q.question_ar,q.question_en??null,q.question_type,q.required,q.options_json??null,q.sort_order,1).run();}
+      const transitionRows=(await c.env.DB.prepare(`SELECT * FROM workflow_transitions WHERE workflow_id=? AND active=1 ORDER BY sort_order`).bind(sourceWorkflow.id).all<any>()).results;
+      for(const t of transitionRows){const from=stageMap.get(t.from_stage_id);if(!from)continue;const to=t.to_stage_id?stageMap.get(t.to_stage_id):null;await c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),newWorkflowId,from,to,t.action,t.label_ar,t.condition_json??null,t.sort_order,1).run();}
+      results.push({companyId,companyName:company.display_name,status:'published',typeId:newTypeId,workflowId:newWorkflowId,version:sourceWorkflow.version});
+      await audit(c,'workflow_transaction_type_published','transaction_type',newTypeId,{sourceTypeId:source.id,companyId,workflowVersion:sourceWorkflow.version});
+    }
+  }catch(e){return errorResponse(c,'WORKFLOW-005',400,e);}
+  return c.json({ok:true,results});
+});
+
+app.get('/admin/company-transactions',async c=>{
+  const rows=await c.env.DB.prepare(`SELECT c.id,c.company_identifier,c.display_name,c.status,
+    (SELECT COUNT(*) FROM transaction_types tt WHERE tt.company_id=c.id AND tt.status='active') type_count,
+    (SELECT COUNT(*) FROM transactions t WHERE t.company_id=c.id) transaction_count
+    FROM companies c WHERE c.status='active' ORDER BY c.display_name`).all<any>();
+  return c.json({items:rows.results});
+});
+app.get('/admin/company-transactions/:companyId/types',async c=>{
+  const companyId=c.req.param('companyId');
+  const company=await c.env.DB.prepare(`SELECT id,company_identifier,display_name,status FROM companies WHERE id=?`).bind(companyId).first<any>();
+  if(!company)return errorResponse(c,'WORKFLOW-003',404);
+  const rows=await c.env.DB.prepare(`SELECT tt.id,tt.name_ar,tt.name_en,tt.description,tt.status,wd.id workflow_id,wd.version workflow_version,wd.status workflow_status,
+    (SELECT COUNT(*) FROM transactions t WHERE t.transaction_type_id=tt.id AND t.company_id=tt.company_id) transaction_count
+    FROM transaction_types tt LEFT JOIN workflow_definitions wd ON wd.transaction_type_id=tt.id AND wd.status='active'
+    WHERE tt.company_id=? ORDER BY tt.name_ar`).bind(companyId).all<any>();
+  return c.json({company,items:rows.results});
+});
+app.get('/admin/company-transactions/:companyId/list',async c=>{
+  const companyId=c.req.param('companyId');
+  const company=await c.env.DB.prepare(`SELECT id,company_identifier,display_name,status FROM companies WHERE id=?`).bind(companyId).first<any>();
+  if(!company)return errorResponse(c,'WORKFLOW-003',404);
+  const typeId=c.req.query('typeId');
+  const params:any[]=[companyId];
+  let sql=`SELECT t.id,t.transaction_number,t.status,t.created_at,t.updated_at,tt.name_ar transaction_type_name,ws.name_ar stage_name,
+    TRIM(COALESCE(e.first_name,'')||' '||COALESCE(e.father_name,'')||' '||COALESCE(e.family_name,'')) employee_name
+    FROM transactions t JOIN transaction_types tt ON tt.id=t.transaction_type_id LEFT JOIN workflow_stages ws ON ws.id=t.current_stage_id
+    LEFT JOIN employees e ON e.id=t.employee_id AND e.company_id=t.company_id WHERE t.company_id=?`;
+  if(typeId){sql+=` AND t.transaction_type_id=?`;params.push(typeId);}sql+=` ORDER BY t.updated_at DESC LIMIT 200`;
+  const rows=await c.env.DB.prepare(sql).bind(...params).all<any>();
+  return c.json({company,items:rows.results});
+});
+app.get('/admin/company-transactions/:companyId/transactions/:id',async c=>{
+  const companyId=c.req.param('companyId'),id=c.req.param('id');
+  const tx=await c.env.DB.prepare(`SELECT t.*,tt.name_ar transaction_type_name,tt.name_en transaction_type_name_en,ws.name_ar stage_name,
+    TRIM(COALESCE(e.first_name,'')||' '||COALESCE(e.father_name,'')||' '||COALESCE(e.family_name,'')) employee_name
+    FROM transactions t JOIN transaction_types tt ON tt.id=t.transaction_type_id LEFT JOIN workflow_stages ws ON ws.id=t.current_stage_id
+    LEFT JOIN employees e ON e.id=t.employee_id AND e.company_id=t.company_id WHERE t.id=? AND t.company_id=?`).bind(id,companyId).first<any>();
+  if(!tx)return errorResponse(c,'TRANSACTION-007',404);
+  const workflow=await loadWorkflow(c,tx.workflow_id);
+  const history=await c.env.DB.prepare(`SELECT tse.*,ws.name_ar stage_name FROM transaction_stage_executions tse JOIN workflow_stages ws ON ws.id=tse.stage_id WHERE tse.transaction_id=? ORDER BY tse.execution_order`).bind(id).all<any>();
+  const actions=await c.env.DB.prepare(`SELECT * FROM transaction_actions WHERE transaction_id=? ORDER BY created_at,id`).bind(id).all<any>();
+  const answers=await c.env.DB.prepare(`SELECT ta.*,wf.field_key,wf.label_ar field_label,wq.question_key,wq.question_ar question_label FROM transaction_answers ta LEFT JOIN workflow_fields wf ON wf.id=ta.field_id LEFT JOIN workflow_questions wq ON wq.id=ta.question_id WHERE ta.transaction_id=?`).bind(id).all<any>();
+  return c.json({company,transaction:{...tx,data:parseJson(tx.data_json,{})},workflow,history:history.results,actions:actions.results,answers:answers.results.map((x:any)=>({...x,value:parseJson(x.value_json,null)}))});
+});
+
 app.get('/admin/workflows/:id',async c=>{const data=await loadWorkflow(c,c.req.param('id'));if(!data)return errorResponse(c,'WORKFLOW-003',404);return c.json(data);});
 
 app.post('/admin/workflows/full-template',async c=>{
