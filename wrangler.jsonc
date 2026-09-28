@@ -9,9 +9,6 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
-  "r2_buckets": [
-    { "binding": "TRANSACTION_FILES", "bucket_name": "hr-nexus-transaction-files" }
-  ],
   "d1_databases": [
     {
       "binding": "DB",

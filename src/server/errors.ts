@@ -44,14 +44,12 @@ export const ERROR_CATALOG = {
   'TRANSACTION-010': 'لا توجد مرحلة تنفيذ نشطة للمعاملة.',
   'TRANSACTION-011': 'مسار الانتقال المطلوب غير مهيأ أو غير صالح.',
   'TRANSACTION-012': 'ملاحظة الموظف غير صالحة.',
-  'TRANSACTION-013': 'المرفقات غير مهيأة أو غير مسموحة في هذه المرحلة.',
-  'TRANSACTION-014': 'حجم الملف أو عدد المرفقات يتجاوز الحد المسموح.',
   'DB-001': 'تعذر حفظ التغيير. استخدم رقم المرجع عند التواصل مع الدعم.'
 } as const;
 
 export type AppErrorCode = keyof typeof ERROR_CATALOG;
 
-export function errorResponse(c: Context<Env>, code: AppErrorCode, status: 400|403|404|409|500|503, details?: unknown) {
+export function errorResponse(c: Context<Env>, code: AppErrorCode, status: 400|403|404|409|500, details?: unknown) {
   const referenceId = crypto.randomUUID();
   console.error('HR_NEXUS_ERROR', { referenceId, code, path: c.req.path, details });
   return c.json({ error: code, referenceId, message: ERROR_CATALOG[code] }, status);
