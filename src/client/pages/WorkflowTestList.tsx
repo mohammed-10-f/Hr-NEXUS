@@ -11,7 +11,7 @@ function writeRuns(items:TestRun[]){localStorage.setItem(STORAGE_KEY,JSON.string
 export function WorkflowTestList(){
  const navigate=useNavigate();
  const [types,setTypes]=useState<any[]>([]),[runs,setRuns]=useState<TestRun[]>([]),[selectedType,setSelectedType]=useState(''),[search,setSearch]=useState(''),[status,setStatus]=useState(''),[loading,setLoading]=useState(true),[error,setError]=useState('');
- async function load(){setLoading(true);setError('');try{const r=await api<any>('/api/workflows/admin/types');setTypes(r.items||[]);setRuns(readRuns());}catch{setError('تعذر تحميل بيئة الاختبار.')}finally{setLoading(false)}}
+ async function load(){setLoading(true);setError('');try{const r=await api<any>('/api/workflows/admin/types');setTypes(r.items||[]);const all=readRuns();const resetAt=r.engineResetAt?Date.parse(r.engineResetAt):0;const valid=resetAt?all.filter(x=>Date.parse(x.createdAt)>=resetAt):all;if(valid.length!==all.length)writeRuns(valid);setRuns(valid);}catch{setError('تعذر تحميل بيئة الاختبار.')}finally{setLoading(false)}}
  useEffect(()=>{void load()},[]);
  const activeTypes=useMemo(()=>types.filter(x=>x.status==='active' && (x.company_id===null || x.company_id===undefined)),[types]);
  const filtered=runs.filter(x=>(!selectedType||x.typeId===selectedType)&&(!status||x.status===status)&&(!search||`${x.typeName} ${x.stageName}`.includes(search)));

@@ -157,3 +157,8 @@ The schema already supports:
 - future transaction and payroll modules without changing the authentication identity model.
 
 The workflow engine itself is intentionally not implemented in Phase 2.
+
+
+## Phase 6 transaction attachments
+
+The workflow engine stores uploaded transaction files in Cloudflare R2 using the `TRANSACTION_FILES` binding. Before deploying this version, create an R2 bucket named `hr-nexus-transaction-files` in the same Cloudflare account as the Worker. The existing D1 database remains `hr-nexus`; the new migration `0009_phase6_transaction_history_snapshots.sql` adds immutable per-stage display/answer snapshots. The Studio reset action clears Phase 6 transactions, drafts, workflow templates, company copies, sequences, related audit entries, and R2 attachment objects; it does not delete Phase 1–5 companies, employees, users, roles, or permissions.
