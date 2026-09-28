@@ -2,7 +2,6 @@ export type Env = {
   Bindings: {
     DB: D1Database;
     ASSETS: Fetcher;
-    TRANSACTION_FILES?: R2Bucket;
     SESSION_COOKIE?: string;
     COMPANY_ACCESS_COOKIE?: string;
     SESSION_TTL_SECONDS?: string;
