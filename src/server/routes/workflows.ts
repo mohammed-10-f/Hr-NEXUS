@@ -55,6 +55,27 @@ app.get('/admin/companies',async c=>{
   const rows=await c.env.DB.prepare(`SELECT id,company_identifier,display_name,status FROM companies WHERE status='active' ORDER BY display_name`).all<any>();
   return c.json({items:rows.results});
 });
+app.post('/admin/transactions/clear',async c=>{
+  const counts=await Promise.all([
+    c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transactions`).first<any>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transaction_types`).first<any>()
+  ]);
+  const transactionCount=Number(counts[0]?.count||0);
+  const typeCount=Number(counts[1]?.count||0);
+  try{
+    // Full Phase 6 transaction reset: real transactions first (children cascade),
+    // then sequences, then transaction types (their workflow configuration cascades).
+    // This intentionally preserves the database schema, companies, employees,
+    // permissions and the rest of HR Nexus.
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM transactions`),
+      c.env.DB.prepare(`DELETE FROM transaction_sequences`),
+      c.env.DB.prepare(`DELETE FROM transaction_types`)
+    ]);
+  }catch(e){return errorResponse(c,'DB-001',500,e);}
+  await audit(c,'workflow_transaction_factory_reset','transaction_engine',null,{deletedTransactions:transactionCount,deletedTransactionTypes:typeCount,scope:'all_companies',sequencesReset:true,workflowDefinitionsRemoved:true});
+  return c.json({ok:true,deletedCount:transactionCount,deletedTypeCount:typeCount});
+});
 app.get('/admin/types',async c=>{
   const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count,(SELECT wd.version FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id AND wd.status='active' ORDER BY wd.version DESC LIMIT 1) workflow_version FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
   return c.json({items:rows.results});
@@ -164,6 +185,34 @@ app.get('/admin/company-transactions/:companyId/transactions/:id',async c=>{
 });
 
 app.get('/admin/workflows/:id',async c=>{const data=await loadWorkflow(c,c.req.param('id'));if(!data)return errorResponse(c,'WORKFLOW-003',404);return c.json(data);});
+app.patch('/admin/workflows/:id',async c=>{
+  const workflowId=c.req.param('id');
+  const p=workflowSchema.safeParse(await c.req.json().catch(()=>null));
+  if(!p.success)return errorResponse(c,'WORKFLOW-001',400);
+  const d=p.data;
+  const existing=await c.env.DB.prepare(`SELECT * FROM workflow_definitions WHERE id=?`).bind(workflowId).first<any>();
+  if(!existing)return errorResponse(c,'WORKFLOW-003',404);
+  if(existing.transaction_type_id!==d.transactionTypeId)return errorResponse(c,'WORKFLOW-001',400);
+  const actor=actorId(c);
+  try{
+    if(d.status==='active')await c.env.DB.prepare(`UPDATE workflow_definitions SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE transaction_type_id=? AND id<>? AND status='active'`).bind(d.transactionTypeId,workflowId).run();
+    await c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,status=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(d.description??null,JSON.stringify(d.allowedSubmitters??[]),d.status,actor,workflowId).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM workflow_fields WHERE workflow_id=?`).bind(workflowId),
+      c.env.DB.prepare(`DELETE FROM workflow_questions WHERE workflow_id=?`).bind(workflowId),
+      c.env.DB.prepare(`DELETE FROM workflow_conditions WHERE workflow_id=?`).bind(workflowId),
+      c.env.DB.prepare(`DELETE FROM workflow_transitions WHERE workflow_id=?`).bind(workflowId),
+      c.env.DB.prepare(`DELETE FROM workflow_stages WHERE workflow_id=?`).bind(workflowId)
+    ]);
+    const stageIds=new Set<string>(); const stageMap=new Map<string,string>();
+    for(const st of d.stages){const incoming=st.id??crypto.randomUUID();if(stageIds.has(incoming))throw new Error('DUPLICATE_STAGE_ID');stageIds.add(incoming);const sid=crypto.randomUUID();stageMap.set(incoming,sid);await c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(sid,workflowId,st.nameAr,st.nameEn??null,st.stageOrder,st.responsibleType,st.responsibleValue??null,st.durationMinutes??null,JSON.stringify(st.config??{}),st.active?1:0).run();}
+    for(const f of d.fields){if(f.stageId&&!stageIds.has(f.stageId))throw new Error('FIELD_STAGE_INVALID');await c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,f.stageId?(stageMap.get(f.stageId)??null):null,f.fieldKey,f.labelAr,f.labelEn??null,f.fieldType,f.required?1:0,f.options?JSON.stringify(f.options):null,JSON.stringify(f.config??{}),f.sortOrder,f.active?1:0).run();}
+    for(const q of d.questions){if(!stageIds.has(q.stageId))throw new Error('QUESTION_STAGE_INVALID');await c.env.DB.prepare(`INSERT INTO workflow_questions(id,workflow_id,stage_id,question_key,question_ar,question_en,question_type,required,options_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(q.stageId),q.questionKey,q.questionAr,q.questionEn??null,q.questionType,q.required?1:0,q.options?JSON.stringify(q.options):null,q.sortOrder,q.active?1:0).run();}
+    for(const t of d.transitions){if(!stageIds.has(t.fromStageId)||(t.toStageId&&!stageIds.has(t.toStageId)))throw new Error('TRANSITION_STAGE_INVALID');await c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.fromStageId),t.toStageId?(stageMap.get(t.toStageId)??null):null,t.action,t.labelAr,t.condition?JSON.stringify(t.condition):null,t.sortOrder,t.active?1:0).run();}
+  }catch(e){return errorResponse(c,String(e).includes('UNIQUE')?'WORKFLOW-002':'WORKFLOW-005',400,e);}
+  await audit(c,'workflow_definition_updated','workflow',workflowId,{transactionTypeId:d.transactionTypeId,status:d.status,stageCount:d.stages.length});
+  return c.json({ok:true,id:workflowId,status:d.status});
+});
 
 app.post('/admin/workflows/full-template',async c=>{
   const body=await c.req.json().catch(()=>null) as any;
