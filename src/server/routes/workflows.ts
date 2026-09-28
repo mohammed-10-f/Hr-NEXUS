@@ -56,7 +56,7 @@ app.get('/admin/companies',async c=>{
   return c.json({items:rows.results});
 });
 app.get('/admin/types',async c=>{
-  const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
+  const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count,(SELECT wd.version FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id AND wd.status='active' ORDER BY wd.version DESC LIMIT 1) workflow_version FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
   return c.json({items:rows.results});
 });
 app.post('/admin/types',async c=>{
