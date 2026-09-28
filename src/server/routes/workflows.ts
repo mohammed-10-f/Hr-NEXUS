@@ -86,6 +86,41 @@ app.post('/admin/workflows',async c=>{
 });
 app.get('/admin/workflows/:id',async c=>{const data=await loadWorkflow(c,c.req.param('id'));if(!data)return errorResponse(c,'WORKFLOW-003',404);return c.json(data);});
 
+app.post('/admin/workflows/full-template',async c=>{
+  const body=await c.req.json().catch(()=>null) as any;
+  const transactionTypeId=typeof body?.transactionTypeId==='string'?body.transactionTypeId:'';
+  if(!transactionTypeId)return errorResponse(c,'WORKFLOW-001',400);
+  const type=await c.env.DB.prepare(`SELECT id,status,name_ar FROM transaction_types WHERE id=?`).bind(transactionTypeId).first<any>();
+  if(!type)return errorResponse(c,'WORKFLOW-003',404);
+  if(type.status!=='active')return errorResponse(c,'WORKFLOW-004',400);
+  const actor=actorId(c),workflowId=crypto.randomUUID(),s1=crypto.randomUUID(),s2=crypto.randomUUID(),s3=crypto.randomUUID();
+  try{
+    await c.env.DB.prepare(`UPDATE workflow_definitions SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE transaction_type_id=? AND status='active'`).bind(transactionTypeId).run();
+    await c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) SELECT ?,?,COALESCE(MAX(version),0)+1,?,?,?,?,? FROM workflow_definitions WHERE transaction_type_id=?`).bind(workflowId,transactionTypeId,`قالب محاكاة متكامل لسير المعاملة: ${type.name_ar}`,JSON.stringify(['company_admin']), 'active',actor,actor,transactionTypeId).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s1,workflowId,'تقديم الطلب','Submit Request',1,'company_admin',null,60,JSON.stringify({employeeFeedback:false})),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s2,workflowId,'مراجعة الطلب','Review Request',2,'company_admin',null,120,JSON.stringify({employeeFeedback:true})),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(s3,workflowId,'الاعتماد النهائي','Final Approval',3,'company_admin',null,120,JSON.stringify({employeeFeedback:false})),
+      c.env.DB.prepare(`INSERT INTO workflow_questions(id,workflow_id,stage_id,question_key,question_ar,question_en,question_type,required,options_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,'review_approved','هل تمت الموافقة على الطلب بعد المراجعة؟','Was the request approved after review?','yes_no',1,null,1),
+      c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,null,'request_title','عنوان الطلب','Request title','text',1,null,JSON.stringify({}),1),
+      c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,null,'request_details','تفاصيل الطلب','Request details','textarea',0,null,JSON.stringify({}),2),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s1,s2,'next','إرسال للمراجعة',null,1),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s1,null,'cancel','إلغاء المعاملة',null,2),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s1,null,'reject','رفض المعاملة',null,3),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,s3,'next','اعتماد المراجعة',JSON.stringify({source:'question.review_approved',operator:'equals',value:true}),1),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,s1,'return','إرجاع للتعديل',JSON.stringify({source:'question.review_approved',operator:'equals',value:false}),2),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,null,'reject','رفض المعاملة',null,3),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s2,null,'cancel','إلغاء المعاملة',null,4),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s3,null,'complete','إكمال واعتماد',null,1),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s3,s2,'return','إرجاع للمراجعة',null,2),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s3,null,'reject','رفض المعاملة',null,3),
+      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,s3,null,'cancel','إلغاء المعاملة',null,4)
+    ]);
+  }catch(e){return errorResponse(c,'WORKFLOW-005',400,e);}
+  await audit(c,'workflow_full_template_created','workflow',workflowId,{transactionTypeId,template:'three_stage_simulation'});
+  return c.json({ok:true,id:workflowId});
+});
+
 // Company transaction endpoints.
 app.use('/types',requireAuthentication,requireCompanyContext,requirePasswordChanged);
 app.use('/transactions/*',requireAuthentication,requireCompanyContext,requirePasswordChanged);
@@ -105,6 +140,40 @@ app.post('/transactions',async c=>{
     ...workflow.questions.filter((q:any)=>Object.prototype.hasOwnProperty.call(d.answers,q.question_key)).map((q:any)=>c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,question_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),txId,q.id,JSON.stringify(d.answers[q.question_key]))),
     c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,to_stage_id,metadata_json) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),txId,companyId,actorId(c),'created',first.id,JSON.stringify({transactionNumber:number}))
   ]);}catch(e){return errorResponse(c,'DB-001',500,e);}await audit(c,'transaction_created','transaction',txId,{transactionNumber:number,transactionTypeId:d.transactionTypeId,stage:first.id});return c.json({ok:true,id:txId,transactionNumber:number},201);
+});
+
+
+app.post('/transactions/simulate',async c=>{
+  const companyId=sessionCompany(c)!;
+  if(!(await allowed(c,'transaction.create')))return forbidden(c);
+  const body=await c.req.json().catch(()=>null) as any;
+  const transactionTypeId=typeof body?.transactionTypeId==='string'?body.transactionTypeId:'';
+  if(!transactionTypeId)return errorResponse(c,'TRANSACTION-001',400);
+  const type=await c.env.DB.prepare(`${visibleTypeSql(companyId)} AND tt.id=?`).bind(companyId,companyId,transactionTypeId).first<any>();
+  if(!type)return errorResponse(c,'TRANSACTION-002',400);
+  const wf=await c.env.DB.prepare(`SELECT id,allowed_submitters_json FROM workflow_definitions WHERE transaction_type_id=? AND status='active'`).bind(transactionTypeId).first<any>();
+  if(!wf)return errorResponse(c,'WORKFLOW-006',400);
+  const workflow=await loadWorkflow(c,wf.id);if(!workflow||!workflow.stages.length)return errorResponse(c,'WORKFLOW-006',400);
+  const submitters=parseJson(wf.allowed_submitters_json,[]);const s=c.get('session');
+  if(submitters.length){const ok=submitters.some((x:string)=>x==='company_admin'&&s?.roles?.includes('company_admin')||x.startsWith('role:')&&s?.roles?.includes(x.slice(5))||x.startsWith('permission:')&&hasPermission(c,x.slice(11)));if(!ok)return forbidden(c);}
+  const data:any={_simulation:true,simulationLabel:'محاكاة سير العمل'};
+  for(const f of workflow.fields.filter((x:any)=>x.stage_id===null&&x.required)){
+    if(f.field_type==='date')data[f.field_key]=new Date().toISOString().slice(0,10);
+    else if(f.field_type==='number')data[f.field_key]=1;
+    else if(f.field_type==='boolean')data[f.field_key]=true;
+    else if(f.field_type==='select'&&Array.isArray(f.options)&&f.options.length)data[f.field_key]=f.options[0]?.value??f.options[0];
+    else data[f.field_key]='بيانات محاكاة';
+  }
+  const first=workflow.stages[0];let number:number;try{number=await allocateNumber(c,companyId);}catch(e){return errorResponse(c,'TRANSACTION-005',500,e);}
+  const txId=crypto.randomUUID(),execId=crypto.randomUUID(),now=new Date().toISOString(),due=first.duration_minutes?new Date(Date.now()+Number(first.duration_minutes)*60000).toISOString():null;
+  try{await c.env.DB.batch([
+    c.env.DB.prepare(`INSERT INTO transactions(id,company_id,transaction_number,transaction_type_id,workflow_id,requester_user_id,employee_id,status,current_stage_id,data_json) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(txId,companyId,number,transactionTypeId,wf.id,actorId(c),null,'قيد الإجراء',first.id,JSON.stringify(data)),
+    c.env.DB.prepare(`INSERT INTO transaction_stage_executions(id,transaction_id,stage_id,execution_order,started_at,due_at,status) VALUES(?,?,?,?,?,?,?)`).bind(execId,txId,first.id,1,now,due,'active'),
+    ...workflow.fields.filter((f:any)=>Object.prototype.hasOwnProperty.call(data,f.field_key)).map((f:any)=>c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,field_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),txId,f.id,JSON.stringify(data[f.field_key]))),
+    c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,to_stage_id,metadata_json) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),txId,companyId,actorId(c),'created',first.id,JSON.stringify({transactionNumber:number,simulation:true}))
+  ]);}catch(e){return errorResponse(c,'DB-001',500,e);}
+  await audit(c,'transaction_simulation_created','transaction',txId,{transactionNumber:number,transactionTypeId,simulation:true});
+  return c.json({ok:true,id:txId,transactionNumber:number,simulation:true},201);
 });
 
 app.get('/transactions',async c=>{
@@ -157,7 +226,7 @@ app.post('/transactions/:id/action',async c=>{
   const currentStage=workflow.stages.find((x:any)=>x.id===exec.stage_id);if(!currentStage)return errorResponse(c,'WORKFLOW-006',409);if(!(await responsibleForStage(c,currentStage,tx)))return forbidden(c,'TRANSACTION-008');
   const data=parseJson(tx.data_json,{});const answersRows=await c.env.DB.prepare(`SELECT ta.*,wq.question_key,wf.field_key FROM transaction_answers ta LEFT JOIN workflow_questions wq ON wq.id=ta.question_id LEFT JOIN workflow_fields wf ON wf.id=ta.field_id WHERE ta.transaction_id=?`).bind(tx.id).all<any>();const answers:any={};for(const x of answersRows.results){if(x.question_key)answers[x.question_key]=parseJson(x.value_json,null);if(x.field_key)answers[x.field_key]=parseJson(x.value_json,null);}Object.assign(data,d.answers??{});
   if(d.action==='next'||d.action==='complete'||d.action==='reject'){if(!requiredComplete(workflow,exec.stage_id,data,answers))return errorResponse(c,'TRANSACTION-004',400);}
-  let toStage:any=null;let action=d.action;if(action==='next'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='next').sort((a:any,b:any)=>a.sort_order-b.sort_order);toStage=candidates.find((x:any)=>conditionMatches(x.condition,data,answers))?.to_stage_id?workflow.stages.find((s:any)=>s.id===candidates.find((x:any)=>conditionMatches(x.condition,data,answers)).to_stage_id):null;if(!toStage)return errorResponse(c,'TRANSACTION-011',409);}else if(action==='return'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='return');const target=d.toStageId?workflow.stages.find((s:any)=>s.id===d.toStageId):candidates.find((x:any)=>x.to_stage_id)?.to_stage_id?workflow.stages.find((s:any)=>s.id===candidates.find((x:any)=>x.to_stage_id)?.to_stage_id):null;if(!target || Number(target.stage_order)>=Number(currentStage.stage_order))return errorResponse(c,'TRANSACTION-011',409);toStage=target;}else if(action==='complete'||action==='reject'||action==='cancel'){const t=workflow.transitions.find((x:any)=>x.from_stage_id===exec.stage_id&&x.action===action&&x.active);if(!t)return errorResponse(c,'TRANSACTION-011',409);}
+  let toStage:any=null;let action=d.action;if(action==='next'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='next').sort((a:any,b:any)=>a.sort_order-b.sort_order);toStage=candidates.find((x:any)=>conditionMatches(x.condition,data,answers))?.to_stage_id?workflow.stages.find((s:any)=>s.id===candidates.find((x:any)=>conditionMatches(x.condition,data,answers)).to_stage_id):null;if(!toStage)return errorResponse(c,'TRANSACTION-011',409);}else if(action==='return'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='return').sort((a:any,b:any)=>a.sort_order-b.sort_order);const selected=candidates.find((x:any)=>conditionMatches(x.condition,data,answers)&&(!d.toStageId||x.to_stage_id===d.toStageId));const target=selected?.to_stage_id?workflow.stages.find((s:any)=>s.id===selected.to_stage_id):null;if(!target || Number(target.stage_order)>=Number(currentStage.stage_order))return errorResponse(c,'TRANSACTION-011',409);toStage=target;}else if(action==='complete'||action==='reject'||action==='cancel'){const t=workflow.transitions.find((x:any)=>x.from_stage_id===exec.stage_id&&x.action===action&&x.active);if(!t)return errorResponse(c,'TRANSACTION-011',409);}
   const now=new Date().toISOString();const newStatus=action==='complete'?'مكتملة':action==='reject'?'مرفوضة':action==='cancel'?'ملغية':'قيد الإجراء';const nextExecId=toStage?crypto.randomUUID():null;let nextOrder=Number(exec.execution_order)+1;const due=toStage?.duration_minutes?new Date(Date.now()+Number(toStage.duration_minutes)*60000).toISOString():null;
   try{
     const stmts:any[]=[c.env.DB.prepare(`UPDATE transaction_stage_executions SET completed_at=?,status=?,acted_by=?,return_reason=? WHERE id=? AND status='active'`).bind(now,action==='return'?'returned':action==='reject'?'rejected':action==='cancel'?'cancelled':'completed',actorId(c),action==='return'?(d.reason??''):null,exec.id),c.env.DB.prepare(`UPDATE transactions SET status=?,current_stage_id=?,updated_at=CURRENT_TIMESTAMP,completed_at=? WHERE id=? AND company_id=? AND status='قيد الإجراء'`).bind(newStatus,toStage?.id??null,newStatus==='قيد الإجراء'?null:now,tx.id,companyId),c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,to_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),tx.id,companyId,actorId(c),action,exec.stage_id,toStage?.id??null,d.reason??null,JSON.stringify({})),c.env.DB.prepare(`UPDATE transactions SET data_json=? WHERE id=?`).bind(JSON.stringify(data),tx.id)];
