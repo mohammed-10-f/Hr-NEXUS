@@ -57,20 +57,32 @@ app.get('/admin/companies',async c=>{
 });
 app.post('/admin/transactions/clear',async c=>{
   const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transactions`).first<any>();
+  const typeRow=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM transaction_types`).first<any>();
   const transactionCount=Number(row?.count||0);
+  const typeCount=Number(typeRow?.count||0);
+  const body=await c.req.json().catch(()=>null) as any;
+  const resetStudio=body?.resetStudio!==false;
   try{
-    // Clear only real/test transaction data. Keep Studio templates, workflows, stages,
-    // fields, questions and company copies intact so the builder is not reset.
-    await c.env.DB.batch([
-      c.env.DB.prepare(`DELETE FROM transactions`),
-      c.env.DB.prepare(`DELETE FROM transaction_sequences`)
-    ]);
+    if(resetStudio){
+      // Full Phase 6 reset: transactions first (RESTRICT references), then the
+      // type tree. Cascades remove workflows, stages, fields, questions,
+      // transitions, conditions and company copies. Companies/users/employees
+      // and permission definitions are intentionally preserved.
+      await c.env.DB.batch([
+        c.env.DB.prepare(`DELETE FROM transactions`),
+        c.env.DB.prepare(`DELETE FROM transaction_sequences`),
+        c.env.DB.prepare(`DELETE FROM transaction_types`)
+      ]);
+    }else{
+      await c.env.DB.batch([c.env.DB.prepare(`DELETE FROM transactions`),c.env.DB.prepare(`DELETE FROM transaction_sequences`)]);
+    }
   }catch(e){return errorResponse(c,'DB-001',500,e);}
-  await audit(c,'workflow_transaction_data_cleared','transaction_engine',null,{deletedTransactions:transactionCount,scope:'all_companies',sequencesReset:true,templatesPreserved:true});
-  return c.json({ok:true,deletedCount:transactionCount});
+  await audit(c,'workflow_transaction_engine_cleared','transaction_engine',null,{deletedTransactions:transactionCount,deletedTypes:resetStudio?typeCount:0,scope:'all_companies',sequencesReset:true,studioReset:resetStudio});
+  return c.json({ok:true,deletedTransactions:transactionCount,deletedTypes:resetStudio?typeCount:0,studioReset:resetStudio});
 });
 app.get('/admin/types',async c=>{
-  const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count,(SELECT wd.version FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id AND wd.status='active' ORDER BY wd.version DESC LIMIT 1) workflow_version FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
+  const rows=await c.env.DB.prepare(`SELECT tt.*,c.display_name company_name,(SELECT COUNT(*) FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id) workflow_count,(SELECT wd.version FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id AND wd.status='active' ORDER BY wd.version DESC LIMIT 1) workflow_version,
+    (SELECT wd.status FROM workflow_definitions wd WHERE wd.transaction_type_id=tt.id ORDER BY CASE wd.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,wd.version DESC LIMIT 1) workflow_status FROM transaction_types tt LEFT JOIN companies c ON c.id=tt.company_id ORDER BY tt.created_at DESC`).all<any>();
   return c.json({items:rows.results});
 });
 app.post('/admin/types',async c=>{
@@ -97,6 +109,21 @@ app.post('/admin/workflows',async c=>{
     for(const t of d.transitions){if(!stageIds.has(t.fromStageId)||(t.toStageId&&!stageIds.has(t.toStageId)))throw new Error('TRANSITION_STAGE_INVALID');await c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.fromStageId),t.toStageId?(stageMap.get(t.toStageId)??null):null,t.action,t.labelAr,t.condition?JSON.stringify(t.condition):null,t.sortOrder,t.active?1:0).run();}
   }catch(e){return errorResponse(c,String(e).includes('UNIQUE')?'WORKFLOW-002':'WORKFLOW-005',400,e);}
   await audit(c,'workflow_definition_created','workflow',workflowId,{transactionTypeId:d.transactionTypeId,status:d.status,stageCount:d.stages.length});return c.json({ok:true,id:workflowId},201);
+});
+app.post('/admin/types/:id/activate-draft',async c=>{
+  const typeId=c.req.param('id');
+  const type=await c.env.DB.prepare(`SELECT id,status FROM transaction_types WHERE id=?`).bind(typeId).first<any>();
+  if(!type)return errorResponse(c,'WORKFLOW-003',404);
+  const draft=await c.env.DB.prepare(`SELECT id,version FROM workflow_definitions WHERE transaction_type_id=? AND status='draft' ORDER BY version DESC,created_at DESC LIMIT 1`).bind(typeId).first<any>();
+  if(!draft)return errorResponse(c,'WORKFLOW-006',400);
+  try{
+    await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE workflow_definitions SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE transaction_type_id=? AND status='active'`).bind(typeId),
+      c.env.DB.prepare(`UPDATE workflow_definitions SET status='active',updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(actorId(c),draft.id)
+    ]);
+  }catch(e){return errorResponse(c,'DB-001',500,e);}
+  await audit(c,'workflow_draft_activated','workflow',draft.id,{transactionTypeId:typeId,version:draft.version});
+  return c.json({ok:true,id:draft.id,version:draft.version});
 });
 app.post('/admin/types/:id/publish',async c=>{
   const body=await c.req.json().catch(()=>null) as any;
@@ -347,7 +374,7 @@ app.post('/transactions/:id/action',async c=>{
   const currentStage=workflow.stages.find((x:any)=>x.id===exec.stage_id);if(!currentStage)return errorResponse(c,'WORKFLOW-006',409);if(!(await responsibleForStage(c,currentStage,tx)))return forbidden(c,'TRANSACTION-008');
   const data=parseJson(tx.data_json,{});const answersRows=await c.env.DB.prepare(`SELECT ta.*,wq.question_key,wf.field_key FROM transaction_answers ta LEFT JOIN workflow_questions wq ON wq.id=ta.question_id LEFT JOIN workflow_fields wf ON wf.id=ta.field_id WHERE ta.transaction_id=?`).bind(tx.id).all<any>();const answers:any={};for(const x of answersRows.results){if(x.question_key)answers[x.question_key]=parseJson(x.value_json,null);if(x.field_key)answers[x.field_key]=parseJson(x.value_json,null);}Object.assign(data,d.answers??{});
   if(d.action==='next'||d.action==='complete'||d.action==='reject'){if(!requiredComplete(workflow,exec.stage_id,data,answers))return errorResponse(c,'TRANSACTION-004',400);}
-  let toStage:any=null;let action=d.action;if(action==='next'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='next').sort((a:any,b:any)=>a.sort_order-b.sort_order);toStage=candidates.find((x:any)=>conditionMatches(x.condition,data,answers))?.to_stage_id?workflow.stages.find((s:any)=>s.id===candidates.find((x:any)=>conditionMatches(x.condition,data,answers)).to_stage_id):null;if(!toStage)return errorResponse(c,'TRANSACTION-011',409);}else if(action==='return'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='return').sort((a:any,b:any)=>a.sort_order-b.sort_order);const selected=candidates.find((x:any)=>conditionMatches(x.condition,data,answers)&&(!d.toStageId||x.to_stage_id===d.toStageId));const target=selected?.to_stage_id?workflow.stages.find((s:any)=>s.id===selected.to_stage_id):null;if(!target || Number(target.stage_order)>=Number(currentStage.stage_order))return errorResponse(c,'TRANSACTION-011',409);toStage=target;}else if(action==='complete'||action==='reject'||action==='cancel'){const t=workflow.transitions.find((x:any)=>x.from_stage_id===exec.stage_id&&x.action===action&&x.active);if(!t)return errorResponse(c,'TRANSACTION-011',409);}
+  let toStage:any=null;let action=d.action;if(action==='next'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='next').sort((a:any,b:any)=>a.sort_order-b.sort_order);const matched=candidates.find((x:any)=>conditionMatches(x.condition,data,answers));toStage=matched?.to_stage_id?workflow.stages.find((s:any)=>s.id===matched.to_stage_id):null;if(!candidates.length){toStage=workflow.stages.find((s:any)=>Number(s.stage_order)===Number(currentStage.stage_order)+1)||null;if(!toStage)action='complete';}else if(!toStage)return errorResponse(c,'TRANSACTION-011',409);}else if(action==='return'){const candidates=workflow.transitions.filter((t:any)=>t.from_stage_id===exec.stage_id&&t.active&&t.action==='return').sort((a:any,b:any)=>a.sort_order-b.sort_order);const selected=candidates.find((x:any)=>conditionMatches(x.condition,data,answers)&&(!d.toStageId||x.to_stage_id===d.toStageId));const target=selected?.to_stage_id?workflow.stages.find((s:any)=>s.id===selected.to_stage_id):null;if(!target || Number(target.stage_order)>=Number(currentStage.stage_order))return errorResponse(c,'TRANSACTION-011',409);toStage=target;}else if(action==='complete'||action==='reject'||action==='cancel'){const t=workflow.transitions.find((x:any)=>x.from_stage_id===exec.stage_id&&x.action===action&&x.active);if(!t)return errorResponse(c,'TRANSACTION-011',409);}
   const now=new Date().toISOString();const newStatus=action==='complete'?'مكتملة':action==='reject'?'مرفوضة':action==='cancel'?'ملغية':'قيد الإجراء';const nextExecId=toStage?crypto.randomUUID():null;let nextOrder=Number(exec.execution_order)+1;const due=toStage?.duration_minutes?new Date(Date.now()+Number(toStage.duration_minutes)*60000).toISOString():null;
   try{
     const stmts:any[]=[c.env.DB.prepare(`UPDATE transaction_stage_executions SET completed_at=?,status=?,acted_by=?,return_reason=? WHERE id=? AND status='active'`).bind(now,action==='return'?'returned':action==='reject'?'rejected':action==='cancel'?'cancelled':'completed',actorId(c),action==='return'?(d.reason??''):null,exec.id),c.env.DB.prepare(`UPDATE transactions SET status=?,current_stage_id=?,updated_at=CURRENT_TIMESTAMP,completed_at=? WHERE id=? AND company_id=? AND status='قيد الإجراء'`).bind(newStatus,toStage?.id??null,newStatus==='قيد الإجراء'?null:now,tx.id,companyId),c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,to_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),tx.id,companyId,actorId(c),action,exec.stage_id,toStage?.id??null,d.reason??null,JSON.stringify({answersSnapshot:d.answers??{},dataSnapshot:data,stageId:exec.stage_id})),c.env.DB.prepare(`UPDATE transactions SET data_json=? WHERE id=?`).bind(JSON.stringify(data),tx.id)];
