@@ -54,13 +54,19 @@ export function WorkflowTestEnvironment(){
   }
   function pass(){
     if(!currentStage)return;const errs=missing(currentFields);if(Object.keys(errs).length)return;
-    const route=chooseRoute();if(!route){setError('هذا القالب غير مكتمل. عُد إلى الاستوديو لإكمال مساره.');return;}
+    const route=chooseRoute();
+    if(!route&&currentStage.id===stages[stages.length-1]?.id){
+      const answers=currentFields.map(f=>({label:f.label_ar,value:values[f.field_key]}));
+      setHistory(h=>[...h,{stageId:currentStage.id,answers,action:'مكتملة'}]);
+      setFinished('مكتملة');setFieldErrors({});return;
+    }
+    if(!route){setError('هذا القالب غير مكتمل. عُد إلى الاستوديو لإكمال مساره.');return;}
     const answers=currentFields.map(f=>({label:f.label_ar,value:values[f.field_key]}));
     setHistory(h=>[...h,{stageId:currentStage.id,answers,action:actionLabels[route.action]}]);
     if(route.action!=='next'&&route.action!=='return'){setFinished(actionLabels[route.action]);setFieldErrors({});return;}
     if(route.to_stage_id){setStageId(route.to_stage_id);setFieldErrors({});setFeedbackOpen(false);setFeedbackText('');}
   }
-  if(!params.typeId)return <div className="workflow-test-page"><div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>بيئة الاختبار</h1><p>اختبار حقيقي للمسار داخل المتصفح دون إنشاء معاملة.</p></div><Link className="btn secondary" to="/workflow-studio"><ArrowLeft size={15}/> الاستوديو</Link></div><section className="test-template-board panel"><div className="panel-head"><div><span className="eyebrow">اختبار معزول</span><h2>اختر قالبًا</h2><p>المحاكاة لا تحفظ مستخدمين أو موظفين أو معاملات في D1.</p></div><span className="badge info"><ShieldCheck size={13}/> بيئة آمنة</span></div>{listLoading?<div className="panel-empty">جاري التحميل...</div>:templates.length===0?<div className="panel-empty">لا توجد قوالب.</div>:<div className="test-template-list">{templates.map(t=><button className="test-template-card" key={t.id} onClick={()=>navigate(`/workflow-studio/test/${t.id}`)}><span className="test-template-icon"><WorkflowIcon size={19}/></span><div><strong>{t.name_ar}</strong><small>{t.active_version?`معتمد · النسخة ${t.active_version}`:'مسودة'}</small></div><Play size={16}/></button>)}</div>}</section></div>;
+  if(!params.typeId)return <div className="workflow-test-page"><div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>بيئة الاختبار</h1><p>اختبار حقيقي للمسار داخل المتصفح دون إنشاء معاملة.</p></div><Link className="btn secondary" to="/workflow-studio"><ArrowLeft size={15}/> الاستوديو</Link></div><section className="test-template-board panel"><div className="panel-head"><div><span className="eyebrow">اختبار معزول</span><h2>اختر معاملة</h2><p>المحاكاة لا تحفظ مستخدمين أو موظفين أو معاملات في D1.</p></div><span className="badge info"><ShieldCheck size={13}/> بيئة آمنة</span></div>{listLoading?<div className="panel-empty">جاري التحميل...</div>:templates.length===0?<div className="panel-empty">لا توجد معاملات معرفة.</div>:<div className="test-template-list">{templates.map(t=><button className="test-template-card" key={t.id} onClick={()=>navigate(`/workflow-studio/test/${t.id}`)}><span className="test-template-icon"><WorkflowIcon size={19}/></span><div><strong>{t.name_ar}</strong><small>{t.active_version?`معتمد · النسخة ${t.active_version}`:'مسودة'}</small></div><Play size={16}/></button>)}</div>}</section></div>;
   if(pageLoading||!workflow||!type)return <div className="workflow-test-page"><section className="test-state panel"><CircleAlert size={22}/><h3>{error||'جاري تجهيز الاختبار'}</h3></section></div>;
 
   const invalid=validation&&!validation.valid;
@@ -69,8 +75,8 @@ export function WorkflowTestEnvironment(){
   const renderReadOnlyField=(field:Field)=><div className="sim-field readonly" key={field.id}><span>{field.label_ar}{field.required?' *':''}</span><div className="sim-readonly-value">{display(values[field.field_key])}</div></div>;
 
   return <div className="workflow-test-page">
-    <div className="page-header workflow-test-header"><div><div className="eyebrow">بيئة الاختبار</div><h1>{type.name_ar}</h1><p>المحاكاة تعمل داخل المتصفح فقط ولا تنشئ معاملة أو مستخدمًا أو موظفًا في D1.</p></div><div className="header-actions"><Link className="btn secondary" to="/workflow-studio/test"><ArrowLeft size={15}/> القوالب</Link><Link className="btn secondary" to={`/workflow-studio/${type.id}`}>الاستوديو</Link>{(started||finished)&&<button className="btn secondary" onClick={()=>resetLocal()}><RotateCcw size={15}/> إعادة الاختبار</button>}</div></div>
-    {invalid?<section className="test-not-ready panel"><CircleAlert size={24}/><h2>القالب غير جاهز للاختبار</h2><p>أكمل إعداد المسارات والأسئلة في الاستوديو أولًا.</p><Link className="btn primary" to={`/workflow-studio/${type.id}`}>فتح الاستوديو</Link></section>:
+    <div className="page-header workflow-test-header"><div><div className="eyebrow">بيئة الاختبار</div><h1>{type.name_ar}</h1><p>المحاكاة تعمل داخل المتصفح فقط ولا تنشئ معاملة أو مستخدمًا أو موظفًا في D1.</p></div><div className="header-actions"><Link className="btn secondary" to="/workflow-studio/test"><ArrowLeft size={15}/> تعريفات المعاملات</Link><Link className="btn secondary" to={`/workflow-studio/${type.id}`}>الاستوديو</Link>{(started||finished)&&<button className="btn secondary" onClick={()=>resetLocal()}><RotateCcw size={15}/> إعادة الاختبار</button>}</div></div>
+    {invalid?<section className="test-not-ready panel"><CircleAlert size={24}/><h2>المعاملة غير جاهزة للاختبار</h2><p>أكمل إعداد المعاملة ومساراتها وأسئلتها في الاستوديو أولًا.</p><Link className="btn primary" to={`/workflow-studio/${type.id}`}>فتح الاستوديو</Link></section>:
     <>
       <div className="test-flow-rail"><div className="test-flow-base"><span className={`test-flow-step fixed ${started||finished?'done':''}`}><b>•</b><strong>بيانات مقدم الطلب</strong><small>تُستدعى في التشغيل الحقيقي من بيانات النظام</small></span>{stages.map((stage,i)=>{const done=started||finished?i<currentIndex||Boolean(finished):false;const current=started&&!finished&&stage.id===stageId;return <span className={`test-flow-step ${done?'done':current?'current':'pending'}`} key={stage.id}><b>{i+1}</b><strong>{stage.name_ar}</strong><small>{responsibilityLabels[stage.responsible_type]||stage.responsible_value||'مسؤول المرحلة'}</small></span>})}</div></div>
 
