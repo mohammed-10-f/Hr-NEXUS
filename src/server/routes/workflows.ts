@@ -13,6 +13,34 @@ const fieldTypes = ['text','textarea','number','date','datetime','boolean','sele
 const responsibilityTypes = ['direct_manager','position_holder','department_manager','role','permission','company_admin','employee_owner'] as const;
 const actions = ['next','return','reject','cancel','complete'] as const;
 
+const systemFieldCatalog = [
+  {key:'employee_number',label:'الرقم الوظيفي',type:'text',group:'البيانات الأساسية'},
+  {key:'full_name',label:'الاسم الكامل',type:'text',group:'البيانات الأساسية'},
+  {key:'nationality',label:'الجنسية',type:'text',group:'البيانات الأساسية'},
+  {key:'personal_phone',label:'الجوال الشخصي',type:'text',group:'بيانات الاتصال'},
+  {key:'personal_email',label:'البريد الشخصي',type:'text',group:'بيانات الاتصال'},
+  {key:'short_address',label:'العنوان المختصر',type:'text',group:'بيانات الاتصال'},
+  {key:'job_title',label:'المسمى الوظيفي',type:'text',group:'الوظيفة والتنظيم'},
+  {key:'organization_unit',label:'الوحدة التنظيمية',type:'text',group:'الوظيفة والتنظيم'},
+  {key:'position',label:'المنصب',type:'text',group:'الوظيفة والتنظيم'},
+  {key:'manager',label:'المدير المباشر',type:'text',group:'الوظيفة والتنظيم'},
+  {key:'work_location',label:'موقع العمل',type:'text',group:'الوظيفة والتنظيم'},
+  {key:'actual_start_date',label:'تاريخ المباشرة الفعلي',type:'date',group:'التوظيف والعقد'},
+  {key:'hire_date',label:'تاريخ التعيين',type:'date',group:'التوظيف والعقد'},
+  {key:'employment_type',label:'نوع التوظيف',type:'text',group:'التوظيف والعقد'},
+  {key:'contract_type',label:'نوع العقد',type:'text',group:'التوظيف والعقد'},
+  {key:'contract_start_date',label:'بداية العقد',type:'date',group:'التوظيف والعقد'},
+  {key:'contract_end_date',label:'نهاية العقد',type:'date',group:'التوظيف والعقد'},
+  {key:'probation_end_date',label:'نهاية فترة التجربة',type:'date',group:'التوظيف والعقد'},
+  {key:'basic_salary',label:'الراتب الأساسي',type:'number',group:'الراتب والمزايا',sensitive:true},
+  {key:'housing_allowance',label:'بدل السكن',type:'number',group:'الراتب والمزايا',sensitive:true},
+  {key:'transport_allowance',label:'بدل النقل',type:'number',group:'الراتب والمزايا',sensitive:true},
+  {key:'other_allowances',label:'البدلات الأخرى',type:'number',group:'الراتب والمزايا',sensitive:true},
+  {key:'gosi_number',label:'رقم التأمينات',type:'text',group:'البيانات النظامية',sensitive:true},
+  {key:'insurance_provider',label:'مزود التأمين',type:'text',group:'البيانات النظامية',sensitive:true}
+] as const;
+const systemFieldSources = new Set(systemFieldCatalog.map(x=>x.key));
+
 const typeSchema = z.object({
   nameAr: z.string().trim().min(1).max(180),
   description: z.string().trim().max(1000).optional().nullable(),
@@ -27,13 +55,20 @@ const fieldSchema = z.object({
   required: z.boolean(),
   displayOnly: z.boolean(),
   options: z.array(z.string().trim().min(1).max(160)).max(50),
+  config: z.object({
+    displayOnly:z.boolean().optional(),
+    systemSource:z.string().trim().max(120).optional(),
+    owner:z.enum(['requester','subject']).optional(),
+    sensitive:z.boolean().optional(),
+    group:z.string().trim().max(120).optional()
+  }).optional(),
   sortOrder: z.number().int().min(0).max(10000)
 });
 const stageSchema = z.object({
   id: z.string().uuid().optional(),
   nameAr: z.string().trim().min(1).max(180),
-  responsibleType: z.enum(responsibilityTypes),
-  responsibleValue: z.string().trim().max(180).nullable(),
+  responsibleType: z.preprocess(v=>v===''?null:v,z.enum(responsibilityTypes).nullable()),
+  responsibleValue: z.preprocess(v=>v===''?null:v,z.string().trim().max(180).nullable()),
   durationMinutes: z.number().int().min(1).max(525600).nullable()
 });
 const conditionSchema = z.object({
@@ -58,12 +93,17 @@ const workflowSchema = z.object({
   allowedSubmitters: z.array(z.string().min(1).max(120)).min(1).max(20),
   stages: z.array(stageSchema).min(1).max(100),
   fields: z.array(fieldSchema).max(1000),
-  transitions: z.array(transitionSchema).max(1000)
+  transitions: z.array(transitionSchema).max(1000),
+  subjectMode: z.enum(['requester','different_employee']).optional(),
 });
 
 const safeJson = (value: any, fallback: any) => {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
 };
+
+function schemaIssueDetails(error:any){
+  return {issues:(error?.issues||[]).slice(0,12).map((issue:any)=>({path:Array.isArray(issue.path)?issue.path.join('.'):'',message:String(issue.message||'بيانات غير صحيحة.')}))};
+}
 const actorId = (c: any) => c.get('session')?.platformUserId ?? null;
 
 function validationResult() {
@@ -78,18 +118,25 @@ async function loadWorkflow(c: any, workflowId: string) {
     WHERE wd.id=?
   `).bind(workflowId).first<any>();
   if (!workflow) return null;
-  const [stages, fields, transitions] = await Promise.all([
+  const [stages, fields, transitions, settingsRow] = await Promise.all([
     c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(workflowId).all<any>(),
     c.env.DB.prepare(`SELECT * FROM workflow_fields WHERE workflow_id=? AND active=1 ORDER BY CASE WHEN stage_id IS NULL THEN 0 ELSE 1 END,stage_id,sort_order,id`).bind(workflowId).all<any>(),
-    c.env.DB.prepare(`SELECT * FROM workflow_transitions WHERE workflow_id=? AND active=1 ORDER BY from_stage_id,sort_order,id`).bind(workflowId).all<any>()
+    c.env.DB.prepare(`SELECT * FROM workflow_transitions WHERE workflow_id=? AND active=1 ORDER BY from_stage_id,sort_order,id`).bind(workflowId).all<any>(),
+    c.env.DB.prepare(`SELECT * FROM workflow_settings WHERE workflow_id=?`).bind(workflowId).first<any>()
   ]);
   return {
     workflow: {...workflow, allowed_submitters:safeJson(workflow.allowed_submitters_json,[])},
     stages: stages.results.map((s:any)=>({...s, config:safeJson(s.config_json,{})})),
     fields: fields.results.map((f:any)=>({...f, options:safeJson(f.options_json,[]), config:safeJson(f.config_json,{})})),
-    transitions: transitions.results.map((t:any)=>({...t, condition:safeJson(t.condition_json,null)}))
+    transitions: transitions.results.map((t:any)=>({...t, condition:safeJson(t.condition_json,null)})),
+    settings: settingsRow ? {subject_mode: settingsRow.subject_mode||'requester'} : {subject_mode:'requester'}
   };
 }
+
+function errorResponseBody(code: any, zodError?:any){
+  return {error:code,referenceId:crypto.randomUUID(),message:ERROR_MESSAGES[code]||'بيانات غير صحيحة.', ...(zodError?schemaIssueDetails(zodError):{})};
+}
+const ERROR_MESSAGES:any={'WORKFLOW-001':'بيانات سير العمل غير مكتملة أو غير صحيحة.','WORKFLOW-005':'تعذر حفظ سير العمل. استخدم رقم المرجع عند التواصل مع الدعم.'};
 
 async function getType(c:any,id:string) {
   return c.env.DB.prepare(`SELECT * FROM transaction_types WHERE id=? AND company_id IS NULL`).bind(id).first<any>();
@@ -122,6 +169,7 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     const sid=f.stageId??f.stage_id??null;
     if(sid && !stageIds.has(sid)) out.errors.push({code:'FIELD_STAGE',message:'العنصر مرتبط بمرحلة غير موجودة.',fieldId:id});
     if((f.required===true || Number(f.required)===1) && (f.displayOnly===true || f.config?.displayOnly===true)) out.errors.push({code:'READONLY_REQUIRED',message:'العنصر للعرض فقط ولا يمكن أن يكون مطلوبًا.',fieldId:id});
+    if(f.config?.systemSource){ const source=String(f.config.systemSource); const key=source.split('.').slice(1).join('.'); if(!/^((requester)|(subject))\.[a-z0-9_]+$/.test(source) || !systemFieldSources.has(key)) out.errors.push({code:'SYSTEM_SOURCE',message:'بيانات النظام المحددة غير متاحة في نموذج الموظف.',fieldId:id,stageId:sid}); if(sid) out.errors.push({code:'SYSTEM_STAGE',message:'بيانات النظام يجب أن تبقى في أساس المعاملة وليس داخل مرحلة.',fieldId:id,stageId:sid}); }
     if(['select','multiselect'].includes(f.fieldType??f.field_type) && !(f.options??[]).length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
   });
   const stageIndex=new Map(stages.map((s:any,i)=>[s.id,i]));
@@ -161,10 +209,14 @@ function normalizePayload(data:any) {
   const stageMap=new Map<string,string>();
   data.stages.forEach((s:any,i:number)=>{ if(s.id) stageMap.set(s.id,stageIds[i]); });
   const stages=data.stages.map((s:any,i:number)=>({...s,id:stageIds[i],stageOrder:i+1}));
-  const fields=data.fields.map((f:any,i:number)=>({...f,id:f.id??crypto.randomUUID(),stageId:f.stageId?stageMap.get(f.stageId)??f.stageId:null,sortOrder:i}));
+  const fields=data.fields.map((f:any,i:number)=>({...f,id:f.id??crypto.randomUUID(),stageId:f.stageId?stageMap.get(f.stageId)??f.stageId:null,sortOrder:i,config:f.config||{}}));
   const transitions=data.transitions.map((t:any,i:number)=>({...t,id:t.id??crypto.randomUUID(),fromStageId:stageMap.get(t.fromStageId)??t.fromStageId,toStageId:t.toStageId?stageMap.get(t.toStageId)??t.toStageId:null,sortOrder:i}));
   return {stages,fields,transitions};
 }
+
+app.get('/admin/system-fields', async c=>{
+  return c.json({items:systemFieldCatalog.map(x=>({...x}))});
+});
 
 app.get('/admin/types', async c=>{
   const rows=await c.env.DB.prepare(`
@@ -179,7 +231,7 @@ app.get('/admin/types', async c=>{
 
 app.post('/admin/types', async c=>{
   const parsed=typeSchema.safeParse(await c.req.json().catch(()=>null));
-  if(!parsed.success)return errorResponse(c,'WORKFLOW-001',400);
+  if(!parsed.success){const ref=crypto.randomUUID();console.error('HR_NEXUS_ERROR',{referenceId:ref,code:'WORKFLOW-001',path:c.req.path,details:parsed.error.issues});return c.json({...errorResponseBody('WORKFLOW-001',parsed.error)},400);}
   const d=parsed.data;
   const duplicate=await c.env.DB.prepare(`SELECT id FROM transaction_types WHERE company_id IS NULL AND TRIM(name_ar)=TRIM(?)`).bind(d.nameAr).first();
   if(duplicate)return errorResponse(c,'WORKFLOW-007',409);
@@ -188,6 +240,7 @@ app.post('/admin/types', async c=>{
     await c.env.DB.batch([
       c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,? ,?,'inactive',?,?)`).bind(typeId,null,d.nameAr,d.description??null,JSON.stringify(d.allowedSubmitters),actor,actor),
       c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`).bind(workflowId,typeId,1,d.description??null,JSON.stringify(d.allowedSubmitters),actor,actor),
+      c.env.DB.prepare(`INSERT INTO workflow_settings(workflow_id,subject_mode,updated_by) VALUES(?,?,?)`).bind(workflowId,'requester',actor),
       c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(stageId,workflowId,'المرحلة 1',1,'company_admin')
     ]);
   }catch(e){return errorResponse(c,'WORKFLOW-005',500,e);}
@@ -213,7 +266,7 @@ app.get('/admin/workflows/:id', async c=>{
 app.put('/admin/workflows/:id', async c=>{
   const workflowId=c.req.param('id');
   const parsed=workflowSchema.safeParse(await c.req.json().catch(()=>null));
-  if(!parsed.success)return errorResponse(c,'WORKFLOW-001',400);
+  if(!parsed.success){ const ref=crypto.randomUUID(); console.error('HR_NEXUS_ERROR',{referenceId:ref,code:'WORKFLOW-001',path:c.req.path,details:parsed.error.issues}); return c.json({error:'WORKFLOW-001',referenceId:ref,message:'بيانات سير العمل غير مكتملة أو غير صحيحة. راجع الحقول المحددة أدناه.',issues:schemaIssueDetails(parsed.error).issues},400); }
   const existing=await c.env.DB.prepare(`
     SELECT wd.*,tt.company_id type_company_id FROM workflow_definitions wd
     JOIN transaction_types tt ON tt.id=wd.transaction_type_id
@@ -221,7 +274,7 @@ app.put('/admin/workflows/:id', async c=>{
   `).bind(workflowId).first<any>();
   if(!existing)return errorResponse(c,'WORKFLOW-003',404);
   if(existing.status!=='draft')return errorResponse(c,'WORKFLOW-004',409);
-  if(existing.transaction_type_id!==parsed.data.transactionTypeId)return errorResponse(c,'WORKFLOW-001',400);
+  if(existing.transaction_type_id!==parsed.data.transactionTypeId)return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'القالب المفتوح لا يطابق نوع المعاملة المحدد.',issues:[{path:'transactionTypeId',message:'أعد فتح القالب ثم حاول الحفظ مرة أخرى.'}]},400);
 
   const normalized=normalizePayload(parsed.data);
   const validation=validateModel({...normalized,allowedSubmitters:parsed.data.allowedSubmitters});
@@ -237,6 +290,7 @@ app.put('/admin/workflows/:id', async c=>{
       ...oldStages.filter((s:any)=>!oldIds.has(s.id)).map((s:any,i:number)=>c.env.DB.prepare(`UPDATE workflow_stages SET active=0,stage_order=? WHERE id=? AND workflow_id=?`).bind(-200000-i,s.id,workflowId)),
       c.env.DB.prepare(`UPDATE transaction_types SET name_ar=COALESCE(?,name_ar),description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND company_id IS NULL`).bind(parsed.data.nameAr??null,parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,existing.transaction_type_id),
       c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,workflowId),
+      c.env.DB.prepare(`INSERT INTO workflow_settings(workflow_id,subject_mode,updated_by) VALUES(?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET subject_mode=excluded.subject_mode,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(workflowId,parsed.data.subjectMode||'requester',actor),
       c.env.DB.prepare(`DELETE FROM workflow_transitions WHERE workflow_id=?`).bind(workflowId)
     ];
     for(const s of normalized.stages){
@@ -247,7 +301,7 @@ app.put('/admin/workflows/:id', async c=>{
       `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify({})));
     }
     for(const f of normalized.fields){
-      const config={displayOnly:Boolean(f.displayOnly)};
+      const config={...(f.config||{}),displayOnly:Boolean(f.displayOnly)};
       statements.push(c.env.DB.prepare(`
         INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
@@ -321,6 +375,7 @@ app.post('/admin/transactions/cleanup', async c=>{
     'workflow_questions',
     'workflow_fields',
     'workflow_stages',
+    'workflow_settings',
     'workflow_definitions',
     'transaction_type_companies',
     'transaction_types'
