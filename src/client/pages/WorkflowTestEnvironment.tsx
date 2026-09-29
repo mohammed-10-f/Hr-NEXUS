@@ -1,118 +1,61 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Check, CheckCircle2, CircleAlert, Clock3, Play, RotateCcw, ShieldCheck, UserRound, Workflow as WorkflowIcon } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, CheckCircle2, CircleAlert, Play, RotateCcw, ShieldCheck } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 
-type Field={id:string;stage_id:string|null;field_key:string;label_ar:string;field_type:string;required:number;options:string[];sort_order:number;config?:any};
-type Stage={id:string;name_ar:string;stage_order:number;responsible_type:string;responsible_value:string|null;duration_minutes:number|null;config:any};
-type Route={id:string;from_stage_id:string;to_stage_id:string|null;action:'next'|'return'|'complete'|'reject'|'cancel';condition:{fieldKey:string;values:any[]}|null;sort_order:number};
-type Template={id:string;name_ar:string;status:string;latest_version:number|null;active_version:number|null;draft_id:string|null};
-
-const responsibilityLabels:Record<string,string>={employee_owner:'الموظف المرتبط',direct_manager:'المدير المباشر',department_manager:'مدير الإدارة',position_holder:'شاغل المنصب',role:'دور وظيفي',permission:'حامل صلاحية',company_admin:'مدير الشركة',specific_user:'مستخدم محدد'};
-const actionLabels:Record<string,string>={next:'انتقل',return:'ارجع',complete:'مكتملة',reject:'مرفوضة',cancel:'ملغاة'};
-const fieldTypeLabels:Record<string,string>={text:'نص',textarea:'نص طويل',number:'رقم',date:'تاريخ',datetime:'تاريخ ووقت',boolean:'نعم / لا',select:'اختيار واحد',multiselect:'اختيارات متعددة',employee:'موظف',organization_unit:'وحدة تنظيمية',position:'منصب',user:'مستخدم'};
-function display(value:any){if(value===null||value===undefined||value==='')return '—';if(value===true||value==='true')return 'نعم';if(value===false||value==='false')return 'لا';if(Array.isArray(value))return value.join('، ');return String(value);}
-function equals(actual:any,expected:any,type?:string){if(type==='multiselect'){const a=Array.isArray(actual)?actual.map(String):[];return expected.some((v:any)=>a.includes(String(v)));}if(type==='number')return Number(actual)===Number(expected);if(type==='boolean')return Boolean(actual)===(String(expected)==='نعم'||expected===true||String(expected)==='true');return String(actual??'')===String(expected??'');}
-function routeMatches(route:Route,values:Record<string,any>,fields:Field[]){if(!route.condition)return true;const field=fields.find(f=>f.field_key===route.condition?.fieldKey);const actual=values[route.condition.fieldKey];return route.condition.values.some(v=>equals(actual,v,field?.field_type));}
-function LockIconFallback(){return <span className="stage-lock-mark" aria-hidden="true">○</span>}
-function renderField(field:Field,value:any,onChange:(v:any)=>void,error?:string){
-  const common={value:value??'',onChange:(e:any)=>onChange(e.target.value)};
-  const selectOptions=field.options||[];
-  const readOnly=Boolean(field.config?.displayOnly);
-  const control=field.field_type==='textarea'?<textarea {...common} rows={4} readOnly={readOnly}/>:field.field_type==='boolean'?<select disabled={readOnly} value={value??''} onChange={e=>onChange(e.target.value)}><option value="">اختر</option><option value="نعم">نعم</option><option value="لا">لا</option></select>:field.field_type==='select'?<select disabled={readOnly} value={value??''} onChange={e=>onChange(e.target.value)}><option value="">اختر</option>{selectOptions.map(o=><option key={o} value={o}>{o}</option>)}</select>:field.field_type==='multiselect'?<select disabled={readOnly} multiple value={Array.isArray(value)?value:[]} onChange={e=>onChange(Array.from(e.target.selectedOptions).map((o:any)=>o.value))}>{selectOptions.map(o=><option key={o} value={o}>{o}</option>)}</select>:field.field_type==='number'?<input type="number" {...common} readOnly={readOnly}/>:field.field_type==='date'?<input type="date" {...common} readOnly={readOnly}/>:field.field_type==='datetime'?<input type="datetime-local" {...common} readOnly={readOnly}/>:field.field_type==='employee'?<input dir="ltr" {...common} placeholder="رقم الموظف" readOnly={readOnly}/>:<input {...common} readOnly={readOnly}/>;
-  return <label className={`sim-field ${error?'has-error':''} ${readOnly?'readonly':''}`} key={field.id}><span>{field.label_ar}{field.required?' *':''}{readOnly?' · عرض فقط':''}</span>{control}{error&&<small className="sim-field-error">{error}</small>}</label>;
+function empty(v:any){return v===undefined||v===null||v===''||(Array.isArray(v)&&v.length===0);}
+function match(route:any,values:any,fields:any[]){
+ if(!route.condition)return true;
+ const f=fields.find((x:any)=>x.id===route.condition.fieldId);const actual=values[f?.fieldKey];
+ return (route.condition.values||[]).some((expected:any)=>{
+  if(f?.fieldType==='boolean')return String(actual)===String(expected);
+  if(f?.fieldType==='multiselect')return Array.isArray(actual)&&actual.map(String).includes(String(expected));
+  return String(actual??'')===String(expected);
+ });
 }
-
 export function WorkflowTestEnvironment(){
-  const params=useParams<{typeId?:string}>();const navigate=useNavigate();
-  const [templates,setTemplates]=useState<Template[]>([]),[listLoading,setListLoading]=useState(true);
-  const [type,setType]=useState<any>(null),[workflow,setWorkflow]=useState<any>(null),[validation,setValidation]=useState<any>(null),[pageLoading,setPageLoading]=useState(Boolean(params.typeId)),[error,setError]=useState('');
-  const [started,setStarted]=useState(false),[finished,setFinished]=useState<string|null>(null),[stageId,setStageId]=useState('');
-  const [requesterName,setRequesterName]=useState(''),[requesterEmployeeNumber,setRequesterEmployeeNumber]=useState(''),[values,setValues]=useState<Record<string,any>>({}),[fieldErrors,setFieldErrors]=useState<Record<string,string>>({});
-  const [history,setHistory]=useState<Array<{stageId:string;answers:Array<{label:string;value:any}>;action:string}>>([]);
-  const [feedbackOpen,setFeedbackOpen]=useState(false),[feedbackText,setFeedbackText]=useState('');
-
-  useEffect(()=>{api<{items:Template[]}>('/api/workflows/test/templates').then(r=>setTemplates(r.items||[])).catch(()=>setTemplates([])).finally(()=>setListLoading(false));},[]);
-  async function loadType(id:string){
-    setPageLoading(true);setError('');
-    try{const r=await api<any>(`/api/workflows/test/templates/${id}`);setType(r.type);setWorkflow(r.workflow);setValidation(r.validation);setStageId(r.workflow?.stages?.[0]?.id||'');resetLocal(r.workflow?.stages?.[0]?.id||'');}
-    catch{setError('تعذر فتح بيئة الاختبار.');}finally{setPageLoading(false);}
-  }
-  function resetLocal(firstStage?:string){setStarted(false);setFinished(null);setStageId(firstStage||workflow?.stages?.[0]?.id||'');setRequesterName('');setRequesterEmployeeNumber('');setValues({});setFieldErrors({});setHistory([]);setFeedbackOpen(false);setFeedbackText('');}
-  useEffect(()=>{if(params.typeId)void loadType(params.typeId);},[params.typeId]);
-
-  const stages:Stage[]=workflow?.stages||[];const fields:Field[]=workflow?.fields||[];const routes:Route[]=workflow?.transitions||[];
-  const currentStage=stages.find(s=>s.id===stageId);const requestFields=useMemo(()=>fields.filter(f=>!f.stage_id).sort((a,b)=>a.sort_order-b.sort_order),[fields]);const currentFields=useMemo(()=>fields.filter(f=>f.stage_id===stageId).sort((a,b)=>a.sort_order-b.sort_order),[fields,stageId]);const currentRoutes=useMemo(()=>routes.filter(r=>r.from_stage_id===stageId).sort((a,b)=>a.sort_order-b.sort_order),[routes,stageId]);
-  function missing(list:Field[]){const errs:Record<string,string>={};for(const f of list){const v=values[f.field_key];const empty=v===undefined||v===null||v===''||(Array.isArray(v)&&v.length===0);if(f.required&&empty)errs[f.field_key]='هذا الحقل مطلوب.';}setFieldErrors(errs);return errs;}
-  function submit(){
-    const errs=missing(requestFields);if(!requesterName.trim()){errs.__requester='اسم مقدم الطلب مطلوب.';setFieldErrors({...errs});return;}if(Object.keys(errs).length)return;
-    setStarted(true);setFieldErrors({});setStageId(stages[0]?.id||'');
-  }
-  function chooseRoute(){
-    const conditional=currentRoutes.filter(r=>r.condition&&routeMatches(r,values,fields));
-    return conditional[0]||currentRoutes.find(r=>!r.condition)||null;
-  }
-  function pass(){
-    if(!currentStage)return;const errs=missing(currentFields);if(Object.keys(errs).length)return;
-    const route=chooseRoute();
-    if(!route&&currentStage.id===stages[stages.length-1]?.id){
-      const answers=currentFields.map(f=>({label:f.label_ar,value:values[f.field_key]}));
-      setHistory(h=>[...h,{stageId:currentStage.id,answers,action:'مكتملة'}]);
-      setFinished('مكتملة');setFieldErrors({});return;
-    }
-    if(!route){setError('هذا القالب غير مكتمل. عُد إلى الاستوديو لإكمال مساره.');return;}
-    const answers=currentFields.map(f=>({label:f.label_ar,value:values[f.field_key]}));
-    setHistory(h=>[...h,{stageId:currentStage.id,answers,action:actionLabels[route.action]}]);
-    if(route.action!=='next'&&route.action!=='return'){setFinished(actionLabels[route.action]);setFieldErrors({});return;}
-    if(route.to_stage_id){setStageId(route.to_stage_id);setFieldErrors({});setFeedbackOpen(false);setFeedbackText('');}
-  }
-  if(!params.typeId)return <div className="workflow-test-page"><div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>بيئة الاختبار</h1><p>اختبار حقيقي للمسار داخل المتصفح دون إنشاء معاملة.</p></div><Link className="btn secondary" to="/workflow-studio"><ArrowLeft size={15}/> الاستوديو</Link></div><section className="test-template-board panel"><div className="panel-head"><div><span className="eyebrow">اختبار معزول</span><h2>اختر معاملة</h2><p>المحاكاة لا تحفظ مستخدمين أو موظفين أو معاملات في D1.</p></div><span className="badge info"><ShieldCheck size={13}/> بيئة آمنة</span></div>{listLoading?<div className="panel-empty">جاري التحميل...</div>:templates.length===0?<div className="panel-empty">لا توجد معاملات معرفة.</div>:<div className="test-template-list">{templates.map(t=><button className="test-template-card" key={t.id} onClick={()=>navigate(`/workflow-studio/test/${t.id}`)}><span className="test-template-icon"><WorkflowIcon size={19}/></span><div><strong>{t.name_ar}</strong><small>{t.active_version?`معتمد · النسخة ${t.active_version}`:'مسودة'}</small></div><Play size={16}/></button>)}</div>}</section></div>;
-  if(pageLoading||!workflow||!type)return <div className="workflow-test-page"><section className="test-state panel"><CircleAlert size={22}/><h3>{error||'جاري تجهيز الاختبار'}</h3></section></div>;
-
-  const invalid=validation&&!validation.valid;
-  const currentIndex=currentStage?stages.findIndex(s=>s.id===currentStage.id):-1;
-  const readOnlyRequester=requesterName||'لم يُحدد بعد';
-  const renderReadOnlyField=(field:Field)=><div className="sim-field readonly" key={field.id}><span>{field.label_ar}{field.required?' *':''}</span><div className="sim-readonly-value">{display(values[field.field_key])}</div></div>;
-
-  return <div className="workflow-test-page">
-    <div className="page-header workflow-test-header"><div><div className="eyebrow">بيئة الاختبار</div><h1>{type.name_ar}</h1><p>المحاكاة تعمل داخل المتصفح فقط ولا تنشئ معاملة أو مستخدمًا أو موظفًا في D1.</p></div><div className="header-actions"><Link className="btn secondary" to="/workflow-studio/test"><ArrowLeft size={15}/> تعريفات المعاملات</Link><Link className="btn secondary" to={`/workflow-studio/${type.id}`}>الاستوديو</Link>{(started||finished)&&<button className="btn secondary" onClick={()=>resetLocal()}><RotateCcw size={15}/> إعادة الاختبار</button>}</div></div>
-    {invalid?<section className="test-not-ready panel"><CircleAlert size={24}/><h2>المعاملة غير جاهزة للاختبار</h2><p>أكمل إعداد المعاملة ومساراتها وأسئلتها في الاستوديو أولًا.</p><Link className="btn primary" to={`/workflow-studio/${type.id}`}>فتح الاستوديو</Link></section>:
-    <>
-      <div className="test-flow-rail"><div className="test-flow-base"><span className={`test-flow-step fixed ${started||finished?'done':''}`}><b>•</b><strong>بيانات مقدم الطلب</strong><small>تُستدعى في التشغيل الحقيقي من بيانات النظام</small></span>{stages.map((stage,i)=>{const done=started||finished?i<currentIndex||Boolean(finished):false;const current=started&&!finished&&stage.id===stageId;return <span className={`test-flow-step ${done?'done':current?'current':'pending'}`} key={stage.id}><b>{i+1}</b><strong>{stage.name_ar}</strong><small>{responsibilityLabels[stage.responsible_type]||stage.responsible_value||'مسؤول المرحلة'}</small></span>})}</div></div>
-
-      <section className="test-request-card panel">
-        <div className="test-section-heading"><div><span className="eyebrow">أساس المعاملة</span><h2>بيانات مقدم الطلب وأسئلة الطلب</h2><p>بيانات مقدم الطلب أساسية من النظام، ثم يجيب مقدم الطلب على الأسئلة والبيانات التي صممها Super Admin.</p></div><span className="badge info"><ShieldCheck size={13}/> محاكاة</span></div>
-        <div className="requester-system-row"><div><span>اسم مقدم الطلب</span><strong>{readOnlyRequester}</strong></div><div><span>الرقم الوظيفي</span><strong dir="ltr">{requesterEmployeeNumber||'—'}</strong></div><div><span>البيانات التنظيمية</span><strong>تُستدعى من بيانات الموظف المرتبط في التشغيل الحقيقي</strong></div></div>
-        {!started&&!finished?<>
-          <div className="test-simulation-note">هذه الشاشة لا تكتب في قاعدة البيانات. الاسم والرقم التاليان مخصصان لمحاكاة مقدم الطلب داخل المتصفح فقط؛ في المعاملة الفعلية يحددهما النظام من جلسة المستخدم وبيانات الموظف.</div>
-          <div className="sim-grid"><label className={`sim-field ${fieldErrors.__requester?'has-error':''}`}><span>اسم مقدم الطلب في المحاكاة *</span><input value={requesterName} onChange={e=>setRequesterName(e.target.value)}/>{fieldErrors.__requester&&<small className="sim-field-error">{fieldErrors.__requester}</small>}</label><label className="sim-field"><span>الرقم الوظيفي في المحاكاة</span><input dir="ltr" value={requesterEmployeeNumber} onChange={e=>setRequesterEmployeeNumber(e.target.value)} placeholder="رقم الموظف"/></label>{requestFields.map(f=>renderField(f,values[f.field_key],v=>setValues(x=>({...x,[f.field_key]:v})),fieldErrors[f.field_key]))}</div>
-          <div className="test-submit-row"><button className="btn primary large" onClick={submit}><Play size={16}/> تقديم المعاملة</button></div>
-        </>:<div className="sim-grid"> <div className="sim-field readonly"><span>مقدم الطلب</span><div className="sim-readonly-value">{readOnlyRequester}</div></div><div className="sim-field readonly"><span>الرقم الوظيفي</span><div className="sim-readonly-value" dir="ltr">{requesterEmployeeNumber||'—'}</div></div>{requestFields.map(renderReadOnlyField)}</div>}
-      </section>
-
-      <section className="test-stage-stack">
-        {stages.map((stage,i)=>{
-          const isCurrent=started&&!finished&&stage.id===stageId;
-          const stageHistory=history.filter(h=>h.stageId===stage.id);
-          const wasVisited=stageHistory.length>0;
-          const isFuture=!isCurrent&&!wasVisited&&started&&!finished;
-          const isBeforeStart=!started&&!finished;
-          return <article className={`test-stage-card panel ${isCurrent?'is-current':''} ${wasVisited&&!isCurrent?'is-complete':''}`} key={stage.id}>
-            <div className="test-stage-heading"><div className="test-stage-number">{stage.stage_order}</div><div><span>{isCurrent?'المرحلة الحالية':wasVisited?'تم تنفيذها':isBeforeStart?'المرحلة في المسار':'المرحلة التالية'}</span><h2>{stage.name_ar}</h2><p><UserRound size={14}/> {responsibilityLabels[stage.responsible_type]||stage.responsible_value||'مسؤول المرحلة'}</p></div><div className="stage-duration">{stage.duration_minutes?<><Clock3 size={14}/> {stage.duration_minutes} دقيقة</>:'بدون مدة'}</div></div>
-
-            {isCurrent?<>
-              <div className="stage-question-list"><div className="stage-content-heading"><strong>أسئلة وقرارات المرحلة</strong><span>الإجابة هي البيانات التي يستخدمها المسار عند وجود شرط.</span></div>{currentFields.map(f=>renderField(f,values[f.field_key],v=>setValues(x=>({...x,[f.field_key]:v})),fieldErrors[f.field_key]))}</div>
-              {stage.config?.employeeFeedback&&<div className="inline-feedback"><button className="feedback-toggle" onClick={()=>setFeedbackOpen(v=>!v)}>{feedbackOpen?'إخفاء ملاحظات الموظف':'طلب ملاحظات الموظف'}</button>{feedbackOpen&&<div className="feedback-inline-box"><input value={feedbackText} onChange={e=>setFeedbackText(e.target.value)} placeholder="اكتب الملاحظة المطلوبة"/><button className="btn secondary" onClick={()=>setFeedbackOpen(false)}><Check size={14}/> حفظ</button></div>}</div>}
-              <div className="stage-pass-row"><div><span>بعد التمرير يحدد النظام الوجهة من المسارات المعرّفة.</span></div><button className="btn primary large" onClick={pass}>تمرير المعاملة</button></div>
-            </>:wasVisited?<div className="stage-history-content">{stageHistory.map((h,idx)=><div className="stage-history-entry" key={`${h.stageId}-${idx}`}><div className="stage-history-entry-head"><strong>تنفيذ {idx+1}</strong><span>{h.action}</span></div><div className="history-answer-list">{h.answers.filter(a=>a.value!==undefined&&a.value!=='').map(a=><div key={a.label}><span>{a.label}</span><b>{display(a.value)}</b></div>)}</div></div>)}</div>
-            :<div className="stage-locked-preview"><LockIconFallback/><span>{started&&!finished?'لم تصل المعاملة إلى هذه المرحلة بعد.':'لن تُنفذ هذه المرحلة حتى يتم تقديم المعاملة ثم تمرير المسار إليها.'}</span></div>}
-          </article>;
-        })}
-      </section>
-
-      {finished&&<section className={`test-finished panel ${finished==='مكتملة'?'success':''}`}><div className="finished-icon"><CheckCircle2 size={31}/></div><span className="eyebrow">نتيجة الاختبار</span><h2>المعاملة {finished}</h2><p>انتهى المسار داخل بيئة الاختبار فقط. لا يوجد سجل حقيقي في قاعدة البيانات.</p><div className="finished-actions"><button className="btn secondary" onClick={()=>resetLocal()}><RotateCcw size={15}/> إعادة الاختبار</button><Link className="btn primary" to={`/workflow-studio/${type.id}`}>العودة للاستوديو</Link></div></section>}
-    </>}
-    {error&&!invalid&&<div className="form-error workflow-inline-error">{error}</div>}
-  </div>;
-
+ const {typeId}=useParams<{typeId?:string}>();
+ const [templates,setTemplates]=useState<any[]>([]),[data,setData]=useState<any>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [values,setValues]=useState<Record<string,any>>({}),[stageId,setStageId]=useState(''),[history,setHistory]=useState<any[]>([]),[done,setDone]=useState<string|null>(null),[fieldErrors,setFieldErrors]=useState<Record<string,string>>({});
+ useEffect(()=>{api<any>('/api/workflows/test/templates').then(r=>setTemplates(r.items||[])).catch(e=>setError(e.message||'تعذر التحميل.'));},[]);
+ useEffect(()=>{if(typeId)load(typeId);},[typeId]);
+ async function load(id:string){setBusy(true);setError('');try{const r=await api<any>(`/api/workflows/test/templates/${id}`);setData(r);setStageId(r.workflow.stages[0]?.id||'');setValues({});setHistory([]);setDone(null);setFieldErrors({});}catch(e:any){setError(e.message||'تعذر فتح الاختبار.');}finally{setBusy(false);}}
+ const w=data?.workflow;const stages=w?.stages||[];const fields=w?.fields||[];const current=stages.find((s:any)=>s.id===stageId);const currentFields=useMemo(()=>fields.filter((f:any)=>f.stage_id===stageId).sort((a:any,b:any)=>a.sort_order-b.sort_order),[fields,stageId]);const requestFields=useMemo(()=>fields.filter((f:any)=>!f.stage_id).sort((a:any,b:any)=>a.sort_order-b.sort_order),[fields]);
+ function control(f:any){
+  const v=values[f.field_key]??'';
+  if(f.field_type==='textarea')return <textarea rows={4} value={v} readOnly={Boolean(f.config?.displayOnly)} onChange={e=>setValues({...values,[f.field_key]:e.target.value})}/>;
+  if(f.field_type==='boolean')return <select value={v} onChange={e=>setValues({...values,[f.field_key]:e.target.value})}><option value="">اختر</option><option value="نعم">نعم</option><option value="لا">لا</option></select>;
+  if(f.field_type==='select')return <select value={v} onChange={e=>setValues({...values,[f.field_key]:e.target.value})}><option value="">اختر</option>{(f.options||[]).map((x:any)=><option key={x}>{x}</option>)}</select>;
+  if(f.field_type==='multiselect')return <select multiple value={Array.isArray(v)?v:[]} onChange={e=>setValues({...values,[f.field_key]:Array.from(e.target.selectedOptions).map((x:any)=>x.value)})}>{(f.options||[]).map((x:any)=><option key={x}>{x}</option>)}</select>;
+  const type=f.field_type==='number'?'number':f.field_type==='date'?'date':f.field_type==='datetime'?'datetime-local':'text';
+  return <input type={type} value={v} readOnly={Boolean(f.config?.displayOnly)} onChange={e=>setValues({...values,[f.field_key]:e.target.value})}/>;
+ }
+ function validate(list:any[]){const errs:any={};for(const f of list)if(f.required&&!f.config?.displayOnly&&empty(values[f.field_key]))errs[f.field_key]='هذا الحقل مطلوب.';setFieldErrors(errs);return Object.keys(errs).length===0;}
+ function start(){if(!validate(requestFields))return;setStageId(stages[0]?.id||'');setHistory([{kind:'request',title:'بيانات الطلب',values:{...values}}]);}
+ function pass(){
+  if(!current||!validate(currentFields))return;
+  const outgoing=(w.transitions||[]).filter((r:any)=>r.from_stage_id===current.id).sort((a:any,b:any)=>a.sort_order-b.sort_order);
+  const route=outgoing.find((r:any)=>r.condition&&match(r,values,fields))||outgoing.find((r:any)=>!r.condition);
+  const next=route?.to_stage_id?stages.find((s:any)=>s.id===route.to_stage_id):null;
+  setHistory(h=>[...h,{kind:'stage',title:current.name_ar,action:route?.action||'تمرير المعاملة',values:{...values}}]);
+  if(route?.action==='reject'){setDone('مرفوضة');return;}
+  if(route?.action==='cancel'){setDone('ملغية');return;}
+  if(route?.action==='return'){setStageId(route.to_stage_id||stages[0]?.id);return;}
+  if(next){setStageId(next.id);return;}
+  if(stages[stages.length-1]?.id===current.id){setDone('مكتملة');return;}
+  setError('لم يوجد مسار صالح. أصلح ذلك في فحص الاستوديو.');
+ }
+ function reset(){setValues({});setHistory([]);setDone(null);setStageId(stages[0]?.id||'');setFieldErrors({});setError('');}
+ if(!typeId)return <div><div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>بيئة الاختبار</h1><p>محاكاة معزولة لسلوك القالب دون إنشاء بيانات حقيقية.</p></div></div><div className="table-card"><div className="table-wrap"><table><thead><tr><th>المعاملة</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>{templates.map(t=><tr key={t.id}><td><strong>{t.name_ar}</strong></td><td>{t.workflow_id?'جاهز للاختبار':'لا توجد مسودة'}</td><td>{t.workflow_id&&<Link className="btn" to={`/workflow-studio/test/${t.id}`}>فتح الاختبار</Link>}</td></tr>)}</tbody></table></div></div></div>;
+ if(busy&&!data)return <div className="panel-empty">جاري تحميل بيئة الاختبار...</div>;
+ if(!data)return <div className="panel-empty">{error||'تعذر تحميل الاختبار.'}</div>;
+ return <div className="workflow-test"><div className="page-header"><div><div className="eyebrow">بيئة الاختبار</div><h1>{data.type.name_ar}</h1><p>هذه المحاكاة لا تنشئ مستخدمين أو موظفين أو معاملات أو سجلات تاريخية في D1.</p></div><div className="workflow-actions"><Link className="btn" to={`/workflow-studio/${data.type.id}`}><ArrowLeft size={15}/>العودة للمصمم</Link><button className="btn" onClick={reset}><RotateCcw size={15}/>إعادة الاختبار</button></div></div>
+ {error&&<div className="wf-alert danger"><CircleAlert size={18}/>{error}</div>}
+ {!done&&<div className="wf-test-grid"><aside className="panel"><h3>مسار الاختبار</h3><div className="wf-test-timeline"><div className="done-step"><CheckCircle2 size={16}/>بيانات مقدم الطلب</div>{stages.map((s:any,i:number)=><div key={s.id} className={stageId===s.id?'current-step':history.some(h=>h.title===s.name_ar)?'done-step':'pending-step'}><span>{i+1}</span>{s.name_ar}</div>)}</div></aside>
+ <main className="panel"><div className="wf-test-requester"><div><strong>مقدم الطلب</strong><span>{data.testRequester.name}</span></div><div><strong>رقم الموظف</strong><span>{data.testRequester.employeeNumber}</span></div><div><strong>المسمى</strong><span>{data.testRequester.jobTitle}</span></div><div><strong>الوحدة</strong><span>{data.testRequester.organizationUnit}</span></div></div>
+ {history.length===0?<><div className="wf-test-section"><h3>أسئلة / بيانات الطلب</h3>{requestFields.length?requestFields.map((f:any)=><TestField key={f.id} f={f} value={values[f.field_key]} error={fieldErrors[f.field_key]} control={control(f)}/>):<p className="muted">لم يضف المصمم أي عنصر. لا توجد حقول تلقائية.</p>}</div><button className="btn primary" onClick={start}><Play size={16}/>بدء مسار المعاملة</button></>:current&&<><div className="wf-test-stage-head"><span className="wf-step">{current.stage_order}</span><div><h2>{current.name_ar}</h2><p>المسؤول: {current.responsible_type}</p></div></div>{currentFields.map((f:any)=><TestField key={f.id} f={f} value={values[f.field_key]} error={fieldErrors[f.field_key]} control={control(f)}/>) }<button className="btn primary" onClick={pass}><ShieldCheck size={16}/>تمرير المعاملة</button></>}</main></div>}
+ {done&&<div className="panel wf-test-result"><CheckCircle2 size={34}/><h2>{done}</h2><p>انتهت المحاكاة دون كتابة معاملة حقيقية في قاعدة البيانات.</p><button className="btn" onClick={reset}><RotateCcw size={15}/>إعادة الاختبار</button></div>}
+ <div className="panel wf-history"><h3>سجل المحاكاة</h3>{history.length?history.map((h,i)=><div key={i}><span>{i+1}</span><strong>{h.title}</strong><em>{h.action||'بيانات الطلب'}</em></div>):<span className="muted">سيظهر مسار الاختبار هنا.</span>}</div>
+ </div>
 }
+function TestField({f,error,control}:{f:any;value:any;error?:string;control:any}){return <label className={`wf-test-field ${error?'has-error':''}`}><span>{f.label_ar}{f.required?' *':''}{f.config?.displayOnly?' · عرض فقط':''}</span>{control}{error&&<small>{error}</small>}</label>}

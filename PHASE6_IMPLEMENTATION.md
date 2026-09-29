@@ -1,51 +1,33 @@
-# HR Nexus — Phase 6
+# Phase 6 — Workflow Engine (rebuilt)
 
-## Scope of this build
+Phase 6 is implemented as a generic Workflow/Transaction foundation.
 
-Phase 6 is rebuilt as a generic Workflow / Transaction Engine foundation, with the first approved product surface intentionally limited to:
+## Studio
+- قوالب المعاملات
+- إنشاء/فتح/تعديل المسودة
+- مراحل ديناميكية محفوظة بترتيب قاعدة البيانات
+- بيانات مقدم الطلب خارج المراحل
+- عناصر موحدة للأسئلة والبيانات والقرارات
+- مسار افتراضي تلقائي
+- مسارات شرطية تعتمد على عناصر معرفة مسبقًا
+- مسؤوليات مبنية على أدوار/صلاحيات/هيكل الموظف، وليس Username ثابت
+- فحص قبل الاعتماد
+- Preview/Test separated
+- Test is isolated and never writes transactions, employees, users or history
 
-- استوديو سير العمل
-- بيئة الاختبار المعزولة
+## Final-stage rule
+There is no special "last stage". Passing the final configured stage marks a future real transaction as `مكتملة`.
 
-## Product model
+## Database
+Existing Phase 6 migration history is retained for safe deployment history. The rebuilt implementation adds only non-destructive indexes/reference permissions in `0010_phase6_rebuilt_engine.sql`.
 
-A transaction template is global and does not belong to a company.
+## Security
+Studio/Test endpoints require authenticated Super Admin access. Company transaction UI is intentionally not exposed in this phase.
 
-The creation model is:
+## Error handling
+API failures return a public error code, reference ID and Arabic message; SQL/stack traces are logged server-side only.
 
-بيانات مقدم الطلب (من بيانات النظام عند التشغيل الحقيقي) + أسئلة وبيانات الطلب
-→ تقديم المعاملة
-→ المرحلة 1
-→ المرحلة التالية حسب المسار
-→ آخر مرحلة معرفة في تعريف سير العمل المحدد
-→ حالة المعاملة: مكتملة عند تنفيذ أثر الإغلاق كمكتملة
 
-بيانات مقدم الطلب ليست مرحلة ولا يكتبها المستخدم يدويًا في التشغيل الحقيقي؛ تُستدعى من بيانات الحساب والموظف المرتبط.
+## Phase 6 Reset
 
-Each workflow stage has its own responsibility, duration, questions/decisions, and configured paths. السؤال والقرار يستخدمان نموذج العنصر نفسه؛ نوع الإجابة هو الذي يحدد إمكانية استخدام الإجابة في المسار.
-
-The user-facing stage action is one primary action: **تمرير المعاملة**. The configured workflow determines the resulting route.
-
-Required data is validated before submit/pass and is shown beside the exact missing element.
-
-No automatic "ملاحظة إضافية" element exists. Notes appear only when the template creator adds a notes element.
-
-Conditional routing is represented as:
-
-**حقل الشرط → القيم → الأثر → الوجهة**
-
-The Studio blocks invalid routes before approval.
-
-## Test environment
-
-The test environment reads a template definition but executes only in browser memory. It shows the requester section at the top, then every workflow stage in order. The requester name/number entered there are simulation inputs only and are never written to D1; the production transaction path will source requester data from the authenticated user and linked Phase 5 employee record.
-
-## Company transactions
-
-Company Transactions are intentionally locked and are not exposed by the current UI or Phase 6 routes. They will be implemented only after Studio + Test are approved.
-
-## Preservation
-
-Phase 1–5 application code and data are preserved. No existing company, user, employee, organization, position, or valid historical data is deleted.
-
-The Phase 6 migration is non-destructive and uses the existing `hr-nexus` D1.
+The Super Admin cleanup action resets all Phase 6 transaction/workflow data to an empty state: transaction types, company mappings, workflow definitions, stages, fields, questions, conditions, transitions, runtime transactions, sequences, executions, answers, actions, feedback, and attachments. It also removes only Phase 6 workflow/transaction audit records. It does not delete the Phase 6 schema, permission definitions, or any Phase 1–5 data.
