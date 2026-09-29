@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronUp, Copy, Eye, GitBranch, LayoutTemplate, PlayCircle, Plus, RotateCcw, Save, Search, Send, Settings2, ShieldCheck, Trash2, Users, X, Zap } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -29,15 +29,19 @@ export function WorkflowAdmin(){
  const [stages,setStages]=useState<Stage[]>([]),[fields,setFields]=useState<Field[]>([]),[questions,setQuestions]=useState<Question[]>([]),[transitions,setTransitions]=useState<Transition[]>([]),[workflowStatus,setWorkflowStatus]=useState('draft'),[draftWorkflowId,setDraftWorkflowId]=useState('');
  const [activeStageId,setActiveStageId]=useState(''),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(''),[search,setSearch]=useState('');
  const [publishOpen,setPublishOpen]=useState(false),[publishSelection,setPublishSelection]=useState<string[]>([]);
+ const skipNextOpenRef=useRef<string|null>(null);
+ const openingTypeRef=useRef<string|null>(null);
 
- async function load(){setLoading(true);setError('');try{const [t,c]=await Promise.all([api<any>('/api/workflows/admin/types'),api<any>('/api/workflows/admin/companies')]);setTypes(t.items||[]);setCompanies(c.items||[]);}catch{setError('تعذر تحميل استوديو سير العمل.')}finally{setLoading(false)}}
- useEffect(()=>{void load()},[]);
- useEffect(()=>{const id=searchParams.get('typeId');const isNew=searchParams.get('new')==='1';if(id){void openType(id,(searchParams.get('section') as any)||'meta')}else if(isNew){resetEditor();setView('create');setSection('meta')}else{setView('list');setTypeId('')}},[searchParams]);
+ async function load(showLoading=true){if(showLoading)setLoading(true);setError('');try{const [t,c]=await Promise.all([api<any>('/api/workflows/admin/types'),api<any>('/api/workflows/admin/companies')]);setTypes(t.items||[]);setCompanies(c.items||[]);}catch{setError('تعذر تحميل استوديو سير العمل.')}finally{if(showLoading)setLoading(false)}}
+ useEffect(()=>{void load(true)},[]);
+ useEffect(()=>{const id=searchParams.get('typeId');const isNew=searchParams.get('new')==='1';const requestedSection=(searchParams.get('section') as any)||'meta';if(id){if(skipNextOpenRef.current===id){skipNextOpenRef.current=null;setView('edit');setSection(requestedSection);return}if(openingTypeRef.current===id && typeId===id){setView('edit');setSection(requestedSection);return}void openType(id,requestedSection)}else if(isNew){resetEditor();setView('create');setSection('meta')}else{setView('list');setTypeId('')}},[searchParams.toString()]);
 
  function resetEditor(){setTypeId('');setType(null);setTypeForm({...emptyType});setAllowedSubmitters(['company_admin']);setStages([]);setFields([]);setQuestions([]);setTransitions([]);setDraftWorkflowId('');setActiveStageId('');setWorkflowStatus('draft');setPublishOpen(false);setPublishSelection([]);}
  function goList(){resetEditor();setSearchParams({});}
 
  async function openType(id:string,initialSection:'meta'|'requester'|'stages'|'validation'|'publish'='meta'){
+   if(openingTypeRef.current===id)return;
+   openingTypeRef.current=id;
    setBusy(true);setError('');setMessage('');
    try{
      const meta=await api<any>(`/api/workflows/admin/types/${id}`);const wf=meta.workflow?.find((x:any)=>x.status==='draft')||meta.workflow?.find((x:any)=>x.status==='active')||meta.workflow?.[0];
@@ -56,7 +60,7 @@ export function WorkflowAdmin(){
        setTransitions((d.transitions||[]).map((x:any)=>{const c=x.condition||null;const condition=c&&typeof c==='object'&&typeof c.source==='string'&&c.source.startsWith('question.')?{...c,source:`field.${legacyQuestionKeyMap[c.source.slice(9)]||c.source.slice(9)}`}:c;return {id:x.id,fromStageId:x.from_stage_id,toStageId:x.to_stage_id||null,action:x.action,labelAr:x.label_ar||'تمرير',condition,sortOrder:x.sort_order};}));
      }else{const first=newStage(1);setWorkflowStatus('draft');setDraftWorkflowId('');setStages([first]);setActiveStageId(first.id);setFields([]);setQuestions([]);setTransitions([]);}
      setView('edit');setSection(initialSection);
-   }catch{setError('تعذر تحميل تعريف المعاملة.')}finally{setBusy(false)}
+   }catch{setError('تعذر تحميل تعريف المعاملة.')}finally{setBusy(false);openingTypeRef.current=null}
  }
 
  async function createType(){
@@ -66,7 +70,7 @@ export function WorkflowAdmin(){
      const d=await api<any>('/api/workflows/admin/types',{method:'POST',body:JSON.stringify({...typeForm,companyId:null,status:'active'})});
      const first=newStage(1);
      const w=await api<any>('/api/workflows/admin/workflows',{method:'POST',body:JSON.stringify({transactionTypeId:d.id,status:'draft',description:typeForm.description||null,allowedSubmitters,stages:[{...first,active:true,durationMinutes:null}],fields:[],questions:[],transitions:[]})});
-     setDraftWorkflowId(w.id);setTypeId(d.id);setType({id:d.id,name_ar:typeForm.nameAr,status:'active'});setStages([first]);setActiveStageId(first.id);setFields([]);setQuestions([]);setTransitions([]);setWorkflowStatus('draft');await load();setSearchParams({typeId:d.id,section:'requester'});setView('edit');setSection('requester');setMessage('تم إنشاء القالب. الآن صمّم بيانات مقدم الطلب ثم ابنِ المراحل.');
+     setDraftWorkflowId(w.id);setTypeId(d.id);setType({id:d.id,name_ar:typeForm.nameAr,status:'active'});setStages([first]);setActiveStageId(first.id);setFields([]);setQuestions([]);setTransitions([]);setWorkflowStatus('draft');setTypes(v=>[{id:d.id,name_ar:typeForm.nameAr,name_en:typeForm.nameEn||null,description:typeForm.description||null,status:'active',workflow_status:'draft',workflow_version:1,workflow_count:1},...v.filter(x=>x.id!==d.id)]);skipNextOpenRef.current=d.id;setView('edit');setSection('requester');setSearchParams({typeId:d.id,section:'requester'});setMessage('تم إنشاء القالب. الآن صمّم بيانات مقدم الطلب ثم ابنِ المراحل.');
    }catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء المعاملة.')}finally{setBusy(false)}
  }
 
@@ -120,7 +124,6 @@ export function WorkflowAdmin(){
      const sf=fields.filter((f:any)=>f.stageId===st.id);
      if(!sf.length)issues.push({level:'warning',title:`«${st.nameAr||`المرحلة ${st.stageOrder}`}» بلا بيانات`,detail:'أضف حقولًا إذا كان المسؤول يحتاج بيانات أو إجابة لتنفيذ المرحلة.',section:'stages',stageId:st.id});
      [...sf,...fields.filter((f:any)=>f.stageId===null)].forEach((f:any)=>{if(['select','multiselect'].includes(f.fieldType)&&!f.options.length)issues.push({level:'error',title:`القائمة «${f.labelAr}» بلا خيارات`,detail:'أضف الخيارات كسطور منفصلة.',section:f.stageId?'stages':'requester',stageId:f.stageId||undefined});});
-     [...sq,...questions.filter((q:any)=>q.stageId===null)].forEach((q:any)=>{if(q.questionType==='select'&&!q.options.length)issues.push({level:'error',title:`السؤال «${q.questionAr}» بلا خيارات`,detail:'أضف خيارات الإجابة.',section:q.stageId?'stages':'requester',stageId:q.stageId||undefined});});
    });
    normalizedTransitions.filter((t:any)=>t.condition).forEach((t:any)=>{const source=t.condition?.source;const sourceKnown=sourceOptions.some((x:any)=>x.key===source);if(!source||!sourceKnown||t.condition.value===''||t.condition.value===undefined)issues.push({level:'error',title:'شرط غير مكتمل',detail:'حدد الحقل والقيمة قبل النشر.',section:'stages',stageId:t.fromStageId});if(['next','return'].includes(t.action)&&!t.toStageId)issues.push({level:'error',title:'وجهة الأثر مفقودة',detail:'حدد المرحلة التي سيذهب إليها هذا الفرع.',section:'stages',stageId:t.fromStageId});});
    return issues;
@@ -138,11 +141,11 @@ export function WorkflowAdmin(){
    setBusy(true);setError('');
    try{const d=await api<any>('/api/workflows/admin/workflows',{method:'POST',body:JSON.stringify({transactionTypeId:typeId,status:'draft',description:typeForm.description||null,allowedSubmitters,stages:stageOptions.map(s=>({...s,active:true,durationMinutes:s.durationMinutes===''?null:s.durationMinutes})),fields,questions:[],transitions:automaticRoutes(stageOptions,transitions)})});setDraftWorkflowId(d.id);setWorkflowStatus('draft');setMessage('تم إنشاء مسودة تعديل جديدة. النسخة المنشورة والمعاملات السابقة لن تتأثر.');return true;}catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء مسودة التعديل.');return false}finally{setBusy(false)}}
  async function saveAll(){const ok=await saveTypeMeta();if(!ok)return false;if(!draftWorkflowId){const created=await startDraftEdit();if(!created)return false;}return await saveWorkflow('draft');}
- async function publish(){if(!publishSelection.length){setError('اختر شركة واحدة على الأقل للنشر.');return}setBusy(true);setError('');try{await saveWorkflow('draft');const d=await api<any>(`/api/workflows/admin/types/${typeId}/publish`,{method:'POST',body:JSON.stringify({companyIds:publishSelection})});setPublishOpen(false);setMessage(`تم نشر القالب إلى ${d.results?.filter((x:any)=>x.status!=='exists').length??publishSelection.length} شركة.`);await load();}catch(e){setError(e instanceof Error?e.message:'تعذر نشر المعاملة للشركات.')}finally{setBusy(false)}}
+ async function publish(){if(!publishSelection.length){setError('اختر شركة واحدة على الأقل للنشر.');return}setBusy(true);setError('');try{await saveWorkflow('draft');const d=await api<any>(`/api/workflows/admin/types/${typeId}/publish`,{method:'POST',body:JSON.stringify({companyIds:publishSelection})});setPublishOpen(false);setMessage(`تم نشر القالب إلى ${d.results?.filter((x:any)=>x.status!=='exists').length??publishSelection.length} شركة.`);await load(false);}catch(e){setError(e instanceof Error?e.message:'تعذر نشر المعاملة للشركات.')}finally{setBusy(false)}}
  async function activate(){setBusy(true);setError('');try{await api(`/api/workflows/admin/types/${typeId}/activate-draft`,{method:'POST'});setWorkflowStatus('active');setDraftWorkflowId('');setMessage('تم تفعيل النسخة الحالية. ولأي تعديل لاحق ستنشئ مسودة إصدار جديدة.');await load();}catch(e){setError(e instanceof Error?e.message:'تعذر تفعيل النسخة.')}finally{setBusy(false)}}
  async function clearStudio(){
    const ok=window.confirm('سيتم حذف كل قوالب المعاملات ومسوداتها ونسخ الشركات والمعاملات وبيانات الاختبار وتسلسلات الأرقام الخاصة بـ Phase 6. لن تُحذف الشركات أو الموظفون أو المستخدمون أو الصلاحيات. هذا الإجراء نهائي. هل تريد تصفير الاستوديو بالكامل؟');if(!ok)return;
-   setBusy(true);setError('');try{const d=await api<any>('/api/workflows/admin/transactions/clear',{method:'POST',body:JSON.stringify({resetStudio:true})});try{localStorage.removeItem(STORAGE_KEY);Object.keys(localStorage).filter(k=>k.startsWith('hrnexus.workflowDraftStep:')).forEach(k=>localStorage.removeItem(k));}catch{}resetEditor();await load();setMessage(`تم تصفير استوديو المعاملات بالكامل. حُذف ${Number(d.deletedTypes||0)} قالبًا و${Number(d.deletedTransactions||0)} معاملة.`);setSearchParams({});}catch(e){setError(e instanceof Error?e.message:'تعذر تصفير الاستوديو.')}finally{setBusy(false)}}
+   setBusy(true);setError('');try{const d=await api<any>('/api/workflows/admin/transactions/clear',{method:'POST',body:JSON.stringify({resetStudio:true})});try{localStorage.removeItem(STORAGE_KEY);Object.keys(localStorage).filter(k=>k.startsWith('hrnexus.workflowDraftStep:')).forEach(k=>localStorage.removeItem(k));}catch{}resetEditor();await load(false);setMessage(`تم تصفير استوديو المعاملات بالكامل. حُذف ${Number(d.deletedTypes||0)} قالبًا و${Number(d.deletedTransactions||0)} معاملة.`);setSearchParams({});}catch(e){setError(e instanceof Error?e.message:'تعذر تصفير الاستوديو.')}finally{setBusy(false)}}
 
  if(loading&&!types.length)return <div className="panel-empty">جاري تحميل استوديو سير العمل...</div>;
  if(view==='list')return <StudioHome types={types} search={search} setSearch={setSearch} openType={openType} createNew={()=>{resetEditor();setSearchParams({new:'1'});setView('create')}} clearStudio={clearStudio} busy={busy} error={error} message={message} />;
@@ -178,7 +181,7 @@ function StudioEditor(p:any){
   <div className="editor-shell-v13"><aside className="editor-nav-v13"><div className="editor-nav-title"><span>بناء المعاملة</span><strong>الخطوات</strong></div>{[['meta','01','بيانات المعاملة'],['requester','02','مقدم الطلب'],['stages','03','المراحل'],['validation','04','التحقق والمعاينة'],['publish','05','النشر للشركات']].map(([id,num,label])=><button key={id} className={`editor-nav-item ${p.section===id?'active':''}`} onClick={()=>p.setSection(id)}><b>{num}</b><span>{label}</span>{p.section===id&&<ChevronLeft size={15}/>}</button>)}<div className="editor-nav-tip"><ShieldCheck size={16}/><span>المعاملات الفعلية تستخدم النسخة المنشورة للشركة. الاختبار هنا لا ينشئ سجلًا حقيقيًا.</span></div></aside>
    <main className="editor-content-v13">{p.section==='meta'&&<MetaSection {...p}/>} {p.section==='requester'&&<RequesterSection {...p}/>} {p.section==='stages'&&<StagesSection {...p}/>} {p.section==='validation'&&<ValidationSection {...p}/>} {p.section==='publish'&&<PublishSection {...p}/>}</main>
   </div>
-  <div className="editor-footer-v13"><div><span>الخطوة {stepIndex+1} من 5</span><strong>{sectionLabels[p.section]}</strong></div><div className="footer-progress-v13"><i style={{width:`${((stepIndex+1)/5)*100}%`}}/></div><div className="footer-buttons-v13">{stepIndex>0&&<button className="btn secondary" onClick={()=>p.setSection(['meta','requester','stages','validation','publish'][stepIndex-1])}>السابق</button>}{stepIndex<4&&<button className="btn primary" onClick={async()=>{await p.saveAll();p.setSection(['meta','requester','stages','validation','publish'][stepIndex+1])}}>حفظ ومتابعة <ChevronLeft size={15}/></button>}</div></div>
+  <div className="editor-footer-v13"><div><span>الخطوة {stepIndex+1} من 5</span><strong>{sectionLabels[p.section]}</strong></div><div className="footer-progress-v13"><i style={{width:`${((stepIndex+1)/5)*100}%`}}/></div><div className="footer-buttons-v13">{stepIndex>0&&<button className="btn secondary" disabled={p.busy} onClick={()=>p.setSection(['meta','requester','stages','validation','publish'][stepIndex-1])}>السابق</button>}{stepIndex<4&&<button className="btn primary" disabled={p.busy} onClick={async()=>{const ok=await p.saveAll();if(ok)p.setSection(['meta','requester','stages','validation','publish'][stepIndex+1])}}>حفظ ومتابعة <ChevronLeft size={15}/></button>}</div></div>
   {p.publishOpen&&<PublishModal {...p}/>} 
  </div>
 }
