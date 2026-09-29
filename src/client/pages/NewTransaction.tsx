@@ -1,33 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowRight, Check, Search, Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Save } from 'lucide-react';
 import { api } from '../lib/api';
 
+function EmployeePicker({value,onChange}:{value:string;onChange:(id:string)=>void}){
+ const [query,setQuery]=useState('');const [items,setItems]=useState<any[]>([]);const [open,setOpen]=useState(false);const [loading,setLoading]=useState(false);
+ useEffect(()=>{let alive=true;const timer=setTimeout(async()=>{setLoading(true);try{const d=await api<any>(`/api/employees?page=1&pageSize=20&search=${encodeURIComponent(query.trim())}`);if(alive)setItems(d.items||[]);}catch{if(alive)setItems([])}finally{if(alive)setLoading(false)}},250);return()=>{alive=false;clearTimeout(timer)}},[query]);
+ const selected=items.find(x=>x.id===value);return <div className="employee-picker"><div className="employee-search-wrap"><Search size={16}/><input value={selected&&!open?`${selected.employee_number} — ${selected.name}`:query} onFocus={()=>{setOpen(true);if(selected)setQuery('')}} onChange={e=>{setQuery(e.target.value);setOpen(true);if(value)onChange('')}} placeholder="ابحث بالرقم الوظيفي أو اسم الموظف"/></div>{open&&<div className="employee-picker-menu">{loading?<div className="picker-empty">جاري البحث...</div>:items.length===0?<div className="picker-empty">لا توجد نتائج</div>:items.map(x=><button type="button" key={x.id} onClick={()=>{onChange(x.id);setQuery('');setOpen(false)}}><strong>{x.employee_number}</strong><span>{x.name}</span></button>)}<button type="button" className="picker-close" onClick={()=>setOpen(false)}>إغلاق</button></div>}</div>;
+}
+
+function FieldInput({field,value,onChange}:{field:any;value:any;onChange:(v:any)=>void}){
+ if(field.field_type==='employee')return <EmployeePicker value={value||''} onChange={onChange}/>;
+ if(field.field_type==='textarea'||field.field_type==='notes')return <textarea rows={4} value={value??''} onChange={e=>onChange(e.target.value)}/>;
+ if(field.field_type==='boolean')return <select value={value===undefined?'':String(value)} onChange={e=>onChange(e.target.value===''?'':e.target.value==='true')}><option value="">اختر</option><option value="true">نعم</option><option value="false">لا</option></select>;
+ if(field.field_type==='select')return <select value={value??''} onChange={e=>onChange(e.target.value)}><option value="">اختر</option>{(field.options||[]).map((o:any,i:number)=><option key={i} value={String(o)}>{String(o)}</option>)}</select>;
+ if(field.field_type==='multiselect')return <select multiple value={Array.isArray(value)?value:[]} onChange={e=>onChange(Array.from(e.target.selectedOptions).map(x=>x.value))}>{(field.options||[]).map((o:any,i:number)=><option key={i} value={String(o)}>{String(o)}</option>)}</select>;
+ return <input type={field.field_type==='date'?'date':field.field_type==='datetime'?'datetime-local':field.field_type==='number'?'number':'text'} value={value??''} onChange={e=>onChange(field.field_type==='number'?(e.target.value===''?'':Number(e.target.value)):e.target.value)}/>;
+}
+
 export function NewTransaction(){
- const nav=useNavigate();
- const [types,setTypes]=useState<any[]>([]);
- const [typeId,setTypeId]=useState('');
- const [wf,setWf]=useState<any>(null);
- const [employeeId,setEmployeeId]=useState('');
- const [employees,setEmployees]=useState<any[]>([]);
- const [data,setData]=useState<any>({});
- const [answers,setAnswers]=useState<any>({});
- const [busy,setBusy]=useState(false);
- const [error,setError]=useState('');
- useEffect(()=>{void (async()=>{try{const [t,e]=await Promise.all([api<any>('/api/workflows/types'),api<any>('/api/employees?page=1&pageSize=50')]);setTypes(t.items);setEmployees(e.items);}catch{setError('تعذر تحميل نموذج المعاملة.')}})();},[]);
+ const nav=useNavigate();const [types,setTypes]=useState<any[]>([]);const [typeId,setTypeId]=useState('');const [wf,setWf]=useState<any>(null);const [data,setData]=useState<any>({});const [answers,setAnswers]=useState<any>({});const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+ useEffect(()=>{void (async()=>{try{const t=await api<any>('/api/workflows/types');setTypes(t.items||[]);}catch{setError('تعذر تحميل أنواع المعاملات.')}})();},[]);
  useEffect(()=>{if(!typeId){setWf(null);return;}void (async()=>{try{setWf(await api<any>(`/api/workflows/types/${typeId}/workflow`));setData({});setAnswers({});}catch{setError('تعذر تحميل مسار المعاملة.')}})();},[typeId]);
- async function save(){setBusy(true);setError('');try{const d=await api<any>('/api/workflows/transactions',{method:'POST',body:JSON.stringify({transactionTypeId:typeId,employeeId:employeeId||null,data,answers})});nav(`/transactions/${d.id}`);}catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء المعاملة.');}finally{setBusy(false);}}
+ const requesterFields=useMemo(()=>wf?.fields?.filter((f:any)=>!f.stage_id)||[],[wf]);const requesterQuestions=useMemo(()=>wf?.questions?.filter((q:any)=>!q.stage_id)||[],[wf]);
+ async function save(){setBusy(true);setError('');try{const linked=requesterFields.find((f:any)=>f.field_type==='employee');const employeeId=linked?data[linked.field_key]||null:null;const d=await api<any>('/api/workflows/transactions',{method:'POST',body:JSON.stringify({transactionTypeId:typeId,employeeId,data,answers})});nav(`/transactions/${d.id}`);}catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء المعاملة.')}finally{setBusy(false)}}
  return <div>
-  <div className="page-header"><div><div className="eyebrow">المعاملات</div><h1>إنشاء معاملة</h1><p>أكمل الحقول الأولية التي يحددها مسار العمل.</p></div><Link className="btn secondary" to="/transactions"><ArrowRight size={16}/>العودة</Link></div>
-  {error&&<div className="login-error page-error">تعذر إنشاء المعاملة. رمز الخطأ: {error}</div>}
-  <section className="panel form-panel">
-   <label className="form-field"><span>نوع المعاملة</span><select value={typeId} onChange={e=>setTypeId(e.target.value)}><option value="">اختر نوع المعاملة</option>{types.map(x=><option key={x.id} value={x.id}>{x.name_ar}</option>)}</select></label>
-   {wf&&<>
-    <label className="form-field" style={{marginTop:14}}><span>الموظف المرتبط (اختياري)</span><select value={employeeId} onChange={e=>setEmployeeId(e.target.value)}><option value="">بدون موظف</option>{employees.map(x=><option key={x.id} value={x.id}>{x.employee_number} — {x.name}</option>)}</select></label>
-    <div className="form-grid" style={{marginTop:18}}>{wf.fields.filter((f:any)=>!f.stage_id).map((f:any)=><label className="form-field" key={f.id}><span>{f.label_ar}{f.required?' *':''}</span>{f.field_type==='textarea'?<textarea rows={4} value={data[f.field_key]??''} onChange={e=>setData({...data,[f.field_key]:e.target.value})}/>:<input type={f.field_type==='date'?'date':f.field_type==='number'?'number':'text'} value={data[f.field_key]??''} onChange={e=>setData({...data,[f.field_key]:f.field_type==='number'?Number(e.target.value):e.target.value})}/>}</label>)}</div>
-    <div className="panel" style={{marginTop:16,background:'#fafbfd'}}><div className="panel-head"><div><h3>{wf.stages[0]?.name_ar}</h3><p>الأسئلة المطلوبة للمرحلة الأولى</p></div></div>{wf.questions.filter((q:any)=>q.stage_id===wf.stages[0]?.id).map((q:any)=><label className="form-field" style={{marginTop:12}} key={q.id}><span>{q.question_ar}{q.required?' *':''}</span>{q.question_type==='yes_no'?<select value={answers[q.question_key]===undefined?'':String(answers[q.question_key])} onChange={e=>setAnswers({...answers,[q.question_key]:e.target.value==='true'})}><option value="">اختر</option><option value="true">نعم</option><option value="false">لا</option></select>:<textarea rows={3} value={answers[q.question_key]??''} onChange={e=>setAnswers({...answers,[q.question_key]:e.target.value})}/>}</label>)}</div>
-    <div className="form-actions" style={{marginTop:18}}><button className="btn primary" disabled={busy||!typeId} onClick={()=>void save()}><Save size={16}/>{busy?'جارٍ الإنشاء...':'إنشاء المعاملة'}</button></div>
-   </>}
+  <div className="page-header"><div><div className="eyebrow">المعاملات</div><h1>إنشاء معاملة</h1><p>ابدأ ببيانات مقدم الطلب وأسئلته، ثم أرسل المعاملة لتدخل المرحلة الأولى لدى المسؤول المحدد.</p></div><Link className="btn secondary" to="/transactions"><ArrowRight size={16}/>العودة</Link></div>
+  {error&&<div className="login-error page-error">{error}</div>}
+  <section className="transaction-create-page">
+   <div className="transaction-create-main">
+    <section className="panel create-card"><div className="panel-head"><div><span className="section-eyebrow">الخطوة 1</span><h3>بيانات المعاملة</h3><p>اختر نوع المعاملة، ثم ستظهر لك عناصر مقدم الطلب التي صممها مسؤول سير العمل.</p></div><Send size={19}/></div><label className="form-field"><span>نوع المعاملة *</span><select value={typeId} onChange={e=>setTypeId(e.target.value)}><option value="">اختر نوع المعاملة</option>{types.map(x=><option key={x.id} value={x.id}>{x.name_ar}</option>)}</select></label></section>
+    {wf&&<>
+      <section className="panel create-card"><div className="panel-head"><div><span className="section-eyebrow">مقدم الطلب</span><h3>العناصر المطلوبة من مقدم المعاملة</h3><p>هذه البيانات تصبح جزءًا ثابتًا من سجل المعاملة وتبقى متاحة للمراحل اللاحقة للقراءة.</p></div><Check size={19}/></div>{requesterFields.length===0&&requesterQuestions.length===0?<div className="empty-soft">لا توجد عناصر أو أسئلة لمقدم الطلب في هذا القالب.</div>:<><div className="form-grid">{requesterFields.map((f:any)=><label className="form-field" key={f.id}><span>{f.label_ar}{f.required?' *':''}</span><FieldInput field={f} value={data[f.field_key]} onChange={v=>setData((x:any)=>({...x,[f.field_key]:v}))}/>{f.field_type==='employee'&&<small className="field-help">يمكن البحث بالرقم الوظيفي أو اسم الموظف.</small>}</label>)}</div>{requesterQuestions.length>0&&<div className="requester-question-block"><div className="block-label">الأسئلة والقرارات</div>{requesterQuestions.map((q:any)=><label className="decision-question" key={q.id}><span>{q.question_ar}{q.required?' *':''}</span>{q.question_type==='yes_no'?<div className="segmented"><button type="button" className={answers[q.question_key]===true?'selected':''} onClick={()=>setAnswers({...answers,[q.question_key]:true})}>نعم</button><button type="button" className={answers[q.question_key]===false?'selected':''} onClick={()=>setAnswers({...answers,[q.question_key]:false})}>لا</button></div>:q.question_type==='select'?<select value={answers[q.question_key]??''} onChange={e=>setAnswers({...answers,[q.question_key]:e.target.value})}><option value="">اختر</option>{(q.options||[]).map((o:any,i:number)=><option key={i} value={String(o)}>{String(o)}</option>)}</select>:<textarea rows={3} value={answers[q.question_key]??''} onChange={e=>setAnswers({...answers,[q.question_key]:e.target.value})}/>}</label>)}</div>}</>}</section>
+      <div className="create-submit-bar"><div><strong>جاهز لتقديم المعاملة؟</strong><span>بعد التقديم سيحدد المحرك المرحلة والمسؤول التالي تلقائيًا.</span></div><button className="btn primary pass-button" disabled={busy||!typeId} onClick={()=>void save()}>{busy?'جارٍ التقديم...':'تقديم المعاملة'}<Send size={16}/></button></div>
+    </>}
+   </div>
+   {wf&&<aside className="transaction-create-side"><section className="panel"><span className="section-eyebrow">مسار المعاملة</span><h3>{wf.workflow?.transaction_type_name||types.find(x=>x.id===typeId)?.name_ar}</h3><div className="workflow-preview-steps">{(wf.stages||[]).map((s:any,i:number)=><div className={`workflow-preview-step ${i===0?'active':''}`} key={s.id}><b>{i+1}</b><div><strong>{s.name_ar}</strong><span>{s.responsible_type==='company_admin'?'مدير الشركة':s.responsible_type==='manager'?'المدير المباشر':'المسؤول المحدد'}</span></div></div>)}</div></section></aside>}
   </section>
  </div>;
 }
