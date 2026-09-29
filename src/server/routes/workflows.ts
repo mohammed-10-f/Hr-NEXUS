@@ -59,6 +59,8 @@ const workflowSchema = z.object({
   transactionTypeId: z.string().uuid(),
   description: z.string().trim().max(1000).nullable().optional(),
   allowedSubmitters: z.array(z.string().trim().min(1).max(200)).max(100).default([]),
+  nameAr: z.string().trim().min(2).max(160).optional(),
+  nameEn: z.string().trim().max(160).nullable().optional(),
   stages: z.array(stageSchema).min(1).max(100),
   fields: z.array(fieldSchema).max(300).default([]),
   transitions: z.array(transitionSchema).max(1000).default([]),
@@ -87,9 +89,10 @@ function fieldHasOptions(field: any) {
   return Array.isArray(options) && options.length > 0;
 }
 
-function validateWorkflowShape(input: { stages: any[]; fields: any[]; transitions: any[] }) {
+function validateWorkflowShape(input: { stages: any[]; fields: any[]; transitions: any[]; allowedSubmitters?: any[] }) {
   const errors: Array<{ code: string; message: string; stageId?: string; fieldKey?: string; transitionId?: string }> = [];
   const warnings: Array<{ message: string; stageId?: string }> = [];
+  if (Array.isArray(input.allowedSubmitters) && input.allowedSubmitters.length === 0) errors.push({ code: 'NO_SUBMITTER', message: 'حدد من يمكنه تقديم المعاملة.' });
   const stages = sortStages(input.stages);
   const stageIds = new Set(stages.map((s: any) => s.id));
   const stageOrder = new Map(stages.map((s: any) => [s.id, Number(s.stage_order ?? s.stageOrder)]));
@@ -98,7 +101,9 @@ function validateWorkflowShape(input: { stages: any[]; fields: any[]; transition
     const order = Number(stage.stage_order ?? stage.stageOrder);
     if (order !== index + 1) errors.push({ code: 'STAGE_ORDER', message: 'رتّب المراحل بالتسلسل الصحيح.', stageId: stage.id });
     if (!String(stage.name_ar ?? stage.nameAr ?? '').trim()) errors.push({ code: 'STAGE_NAME', message: 'اسم المرحلة مطلوب.', stageId: stage.id });
-    if (!responsibilityTypes.includes((stage.responsible_type ?? stage.responsibleType) as any)) errors.push({ code: 'RESPONSIBILITY', message: 'حدد مسؤول المرحلة.', stageId: stage.id });
+    const responsibleType = stage.responsible_type ?? stage.responsibleType;
+    if (!responsibilityTypes.includes(responsibleType as any)) errors.push({ code: 'RESPONSIBILITY', message: 'حدد مسؤول المرحلة.', stageId: stage.id });
+    if (['role','permission','specific_user'].includes(responsibleType) && !String(stage.responsible_value ?? stage.responsibleValue ?? '').trim()) errors.push({ code: 'RESPONSIBILITY_VALUE', message: 'حدد قيمة المسؤول عن هذه المرحلة.', stageId: stage.id });
     const duration = stage.duration_minutes ?? stage.durationMinutes;
     if (duration !== null && duration !== undefined && (!Number.isInteger(Number(duration)) || Number(duration) < 1)) {
       errors.push({ code: 'STAGE_DURATION', message: 'مدة المرحلة يجب أن تكون دقيقة واحدة على الأقل.', stageId: stage.id });
@@ -118,10 +123,13 @@ function validateWorkflowShape(input: { stages: any[]; fields: any[]; transition
     const stageId = field.stage_id ?? field.stageId ?? null;
     if (stageId && !stageIds.has(stageId)) errors.push({ code: 'FIELD_STAGE', message: 'العنصر مرتبط بمرحلة غير موجودة.', stageId, fieldKey: key });
     if (['select', 'multiselect'].includes(type) && !fieldHasOptions(field)) errors.push({ code: 'FIELD_OPTIONS', message: 'أضف القيم التي يمكن الاختيار منها.', stageId: stageId ?? undefined, fieldKey: key });
+    const fieldConfig = field?.config && typeof field.config === 'object' ? field.config : json(field?.config_json, {});
+    if (fieldConfig?.displayOnly && Number(field.required ?? 0) === 1) errors.push({ code: 'FIELD_READONLY_REQUIRED', message: 'عنصر العرض فقط لا يمكن أن يكون مطلوبًا.', stageId: stageId ?? undefined, fieldKey: key });
   }
 
   const routesByStage = new Map<string, any[]>();
   for (const route of input.transitions) {
+    if (route.active === 0 || route.active === false) continue;
     const from = route.from_stage_id ?? route.fromStageId;
     const to = route.to_stage_id ?? route.toStageId ?? null;
     const action = route.action;
@@ -172,10 +180,13 @@ function validateWorkflowShape(input: { stages: any[]; fields: any[]; transition
     const hasTerminal = routes.some((route: any) => ['complete', 'reject', 'cancel'].includes(route.action));
     if (!routes.length) errors.push({ code: 'NO_ROUTE', message: 'حدد أثر التمرير لهذه المرحلة.', stageId: stage.id });
     if (index < stages.length - 1 && !hasForward && !hasTerminal) errors.push({ code: 'NO_FORWARD', message: 'حدد المرحلة التالية أو أثرًا نهائيًا.', stageId: stage.id });
-    if (index === stages.length - 1 && !hasTerminal) errors.push({ code: 'NO_TERMINAL', message: 'المرحلة الأخيرة تحتاج أثر إنهاء.', stageId: stage.id });
+    if (index === stages.length - 1 && !hasTerminal) errors.push({ code: 'NO_TERMINAL', message: 'حدد أثرًا نهائيًا لهذه المرحلة.', stageId: stage.id });
     const defaults = routes.filter((route: any) => !asCondition(route.condition_json ?? route.condition));
-    if (defaults.length > 1) warnings.push({ message: 'هناك أكثر من مسار افتراضي لهذه المرحلة؛ استخدم مسارًا افتراضيًا واحدًا.', stageId: stage.id });
-    if (routes.some((route: any) => route.action === 'next' && index === stages.length - 1)) errors.push({ code: 'LAST_NEXT', message: 'المرحلة الأخيرة لا تحتاج انتقالًا.', stageId: stage.id });
+    if (defaults.length > 1) errors.push({ code: 'MULTIPLE_DEFAULT', message: 'يجب أن يكون للمرحلة مسار افتراضي واحد فقط.', stageId: stage.id });
+    if (routes.some((route: any) => asCondition(route.condition_json ?? route.condition)) && defaults.length === 0) {
+      errors.push({ code: 'CONDITION_FALLBACK', message: index < stages.length - 1 ? 'المسارات المشروطة تحتاج مسارًا افتراضيًا يحدد المرحلة التالية.' : 'المسارات المشروطة تحتاج أثرًا نهائيًا افتراضيًا.', stageId: stage.id });
+    }
+    if (routes.some((route: any) => route.action === 'next' && index === stages.length - 1)) errors.push({ code: 'LAST_NEXT', message: 'لا يمكن لهذا المسار الانتقال دون مرحلة تالية محددة.', stageId: stage.id });
   });
 
   return { valid: errors.length === 0, errors, warnings };
@@ -231,20 +242,30 @@ app.post('/admin/types', async c => {
   const parsed = typeSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return errorResponse(c, 'WORKFLOW-001', 400);
   const d = parsed.data;
+  const duplicate = await c.env.DB.prepare(`
+    SELECT id FROM transaction_types
+    WHERE company_id IS NULL AND TRIM(name_ar)=TRIM(?)
+    LIMIT 1
+  `).bind(d.nameAr).first<any>();
+  if (duplicate) return errorResponse(c, 'WORKFLOW-007', 409);
+
   const typeId = crypto.randomUUID();
   const workflowId = crypto.randomUUID();
   const stageId = crypto.randomUUID();
-  const routeId = crypto.randomUUID();
   const actor = actorId(c);
   try {
     await c.env.DB.batch([
-      c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,name_en,description,status,created_by,updated_by) VALUES(?,?,?,?,?,'active',?,?)`).bind(typeId, null, d.nameAr, d.nameEn ?? null, d.description ?? null, actor, actor),
+      // A new template is not usable until its workflow is approved.
+      c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,name_en,description,status,created_by,updated_by) VALUES(?,?,?,?,?,'inactive',?,?)`).bind(typeId, null, d.nameAr, d.nameEn ?? null, d.description ?? null, actor, actor),
       c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?,?)`).bind(workflowId, typeId, 1, d.description ?? null, JSON.stringify(d.allowedSubmitters?.length ? d.allowedSubmitters : ['self']), actor, actor, actor),
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,1,'company_admin',NULL,NULL,?,1)`).bind(stageId, workflowId, 'المرحلة الأولى', 'Stage 1', JSON.stringify({ employeeFeedback: false })),
-      c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,'تنتهي مكتملة',NULL,0,1)`).bind(routeId, workflowId, stageId, null, 'complete'),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,1,'company_admin',NULL,NULL,?,1)`).bind(stageId, workflowId, 'المرحلة 1', 'Stage 1', JSON.stringify({ employeeFeedback: false })),
     ]);
   } catch (e) {
-    return errorResponse(c, 'WORKFLOW-002', 409, e);
+    const message = String((e as any)?.message || e || '');
+    if (/UNIQUE constraint failed.*transaction_types/i.test(message) || /ux_transaction_types_scope_name/i.test(message)) {
+      return errorResponse(c, 'WORKFLOW-007', 409, e);
+    }
+    return errorResponse(c, 'WORKFLOW-005', 500, e);
   }
   await audit(c, 'workflow_template_created', 'transaction_type', typeId, { nameAr: d.nameAr, workflowId, version: 1 });
   return c.json({ ok: true, id: typeId, workflowId });
@@ -255,6 +276,14 @@ app.patch('/admin/types/:id', async c => {
   if (!parsed.success) return errorResponse(c, 'WORKFLOW-001', 400);
   if (!await globalType(c, c.req.param('id'))) return errorResponse(c, 'WORKFLOW-003', 404);
   const d = parsed.data;
+  if (d.nameAr !== undefined) {
+    const duplicate = await c.env.DB.prepare(`
+      SELECT id FROM transaction_types
+      WHERE company_id IS NULL AND TRIM(name_ar)=TRIM(?) AND id<>?
+      LIMIT 1
+    `).bind(d.nameAr, c.req.param('id')).first<any>();
+    if (duplicate) return errorResponse(c, 'WORKFLOW-007', 409);
+  }
   const sets: string[] = [];
   const values: any[] = [];
   if (d.nameAr !== undefined) { sets.push('name_ar=?'); values.push(d.nameAr); }
@@ -282,11 +311,9 @@ app.post('/admin/types/:id/new-draft', async c => {
   try {
     if (!source) {
       const stageId = crypto.randomUUID();
-      const routeId = crypto.randomUUID();
       await c.env.DB.batch([
         c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?,?)`).bind(workflowId, typeId, version, type.description ?? null, JSON.stringify(['self']), actor, actor, actor),
-        c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,1,'company_admin',NULL,NULL,?,1)`).bind(stageId, workflowId, 'المرحلة الأولى', 'Stage 1', JSON.stringify({ employeeFeedback: false })),
-        c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,'تنتهي مكتملة',NULL,0,1)`).bind(routeId, workflowId, stageId, null, 'complete'),
+        c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,1,'company_admin',NULL,NULL,?,1)`).bind(stageId, workflowId, 'المرحلة 1', 'Stage 1', JSON.stringify({ employeeFeedback: false })),
       ]);
     } else {
       const srcStages = (await c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? ORDER BY stage_order`).bind(source.id).all<any>()).results;
@@ -342,28 +369,40 @@ app.put('/admin/workflows/:id', async c => {
   if (!existing) return errorResponse(c, 'WORKFLOW-003', 404);
   if (existing.status !== 'draft') return errorResponse(c, 'WORKFLOW-004', 409);
   if (existing.transaction_type_id !== data.transactionTypeId) return errorResponse(c, 'WORKFLOW-001', 400);
+  if (data.nameAr !== undefined) {
+    const duplicate = await c.env.DB.prepare(`SELECT id FROM transaction_types WHERE company_id IS NULL AND TRIM(name_ar)=TRIM(?) AND id<>? LIMIT 1`).bind(data.nameAr, existing.transaction_type_id).first<any>();
+    if (duplicate) return errorResponse(c, 'WORKFLOW-007', 409);
+  }
 
   const normalizedStageIds = data.stages.map(stage => stage.id || crypto.randomUUID());
   const stageIdSet = new Set(normalizedStageIds);
   const normalizedStages = data.stages.map((stage, index) => ({ ...stage, id: normalizedStageIds[index], stageOrder: index + 1 }));
   const clientStageIds = new Map(data.stages.map((stage, index) => [stage.id, normalizedStageIds[index]]));
   const shaped = {
-    stages: normalizedStages.map((stage: any) => ({ id: stage.id, stage_order: stage.stageOrder, name_ar: stage.nameAr, responsible_type: stage.responsibleType, duration_minutes: stage.durationMinutes })),
-    fields: data.fields.map((field: any) => ({ field_key: field.fieldKey, label_ar: field.labelAr, field_type: field.fieldType, required: field.required ? 1 : 0, options: field.options || [], stage_id: field.stageId ? clientStageIds.get(field.stageId) || field.stageId : null })),
+    allowedSubmitters: data.allowedSubmitters,
+    stages: normalizedStages.map((stage: any) => ({ id: stage.id, stage_order: stage.stageOrder, name_ar: stage.nameAr, responsible_type: stage.responsibleType, responsible_value: stage.responsibleValue, duration_minutes: stage.durationMinutes })),
+    fields: data.fields.map((field: any) => ({ field_key: field.fieldKey, label_ar: field.labelAr, field_type: field.fieldType, required: field.required ? 1 : 0, options: field.options || [], config: field.config || {}, stage_id: field.stageId ? clientStageIds.get(field.stageId) || field.stageId : null })),
     transitions: data.transitions.map((route: any) => ({ id: route.id || crypto.randomUUID(), from_stage_id: clientStageIds.get(route.fromStageId) || route.fromStageId, to_stage_id: route.toStageId ? clientStageIds.get(route.toStageId) || route.toStageId : null, action: route.action, condition_json: route.condition ? JSON.stringify(route.condition) : null, active: route.active ? 1 : 0 })),
   };
   if (shaped.fields.some((field: any) => field.stage_id && !stageIdSet.has(field.stage_id))) return errorResponse(c, 'WORKFLOW-001', 400);
   const validation = validateWorkflowShape(shaped);
-  if (!validation.valid) return c.json({ error: 'WORKFLOW_VALIDATION', message: 'لم تكتمل إعدادات سير العمل بعد.', validation }, 400);
+  const legacyQuestionCount = Number((await c.env.DB.prepare(`SELECT COUNT(*) count FROM workflow_questions WHERE workflow_id=?`).bind(workflowId).first<any>())?.count || 0);
+  const legacyConditionCount = Number((await c.env.DB.prepare(`SELECT COUNT(*) count FROM workflow_conditions WHERE workflow_id=?`).bind(workflowId).first<any>())?.count || 0);
+  if (legacyQuestionCount || legacyConditionCount) return errorResponse(c, 'WORKFLOW-008', 409);
+  // Drafts are allowed to be incomplete while the Super Admin builds them step-by-step.
+  // Approval remains the hard validation gate. Database/relationship integrity is still enforced below.
 
   const actor = actorId(c);
   try {
     const statements: D1PreparedStatement[] = [
       c.env.DB.prepare(`DELETE FROM workflow_transitions WHERE workflow_id=?`).bind(workflowId),
-      c.env.DB.prepare(`DELETE FROM workflow_conditions WHERE workflow_id=?`).bind(workflowId),
+      // Legacy question/condition tables are compatibility storage. The unified Studio model uses workflow_fields + transition conditions.
+      // Never delete compatibility records during a draft save.
       c.env.DB.prepare(`DELETE FROM workflow_fields WHERE workflow_id=?`).bind(workflowId),
-      c.env.DB.prepare(`DELETE FROM workflow_questions WHERE workflow_id=?`).bind(workflowId),
+      // workflow_questions is a compatibility table for the earlier Phase 6 model.
+      // Do not delete or rewrite it from the unified Studio save path.
       c.env.DB.prepare(`DELETE FROM workflow_stages WHERE workflow_id=?`).bind(workflowId),
+      c.env.DB.prepare(`UPDATE transaction_types SET name_ar=COALESCE(?,name_ar),name_en=CASE WHEN ?=1 THEN ? ELSE name_en END,description=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND company_id IS NULL`).bind(data.nameAr ?? null, data.nameEn === undefined ? 0 : 1, data.nameEn ?? null, data.description ?? null, actor, existing.transaction_type_id),
       c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(data.description ?? null, JSON.stringify(data.allowedSubmitters || []), actor, workflowId),
     ];
 
@@ -381,6 +420,10 @@ app.put('/admin/workflows/:id', async c => {
     }
     await c.env.DB.batch(statements);
   } catch (e) {
+    const message = String((e as any)?.message || e || '');
+    if (/UNIQUE constraint failed.*transaction_types/i.test(message) || /ux_transaction_types_scope_name/i.test(message)) {
+      return errorResponse(c, 'WORKFLOW-007', 409, e);
+    }
     return errorResponse(c, 'WORKFLOW-005', 400, e);
   }
   await audit(c, 'workflow_draft_saved', 'workflow', workflowId, { transactionTypeId: data.transactionTypeId, version: existing.version, stageCount: data.stages.length, fieldCount: data.fields.length, transitionCount: data.transitions.length });
@@ -390,7 +433,7 @@ app.put('/admin/workflows/:id', async c => {
 app.post('/admin/workflows/:id/validate', async c => {
   const data = await loadWorkflow(c, c.req.param('id'));
   if (!data) return errorResponse(c, 'WORKFLOW-003', 404);
-  return c.json(validateWorkflowShape({ stages: data.stages, fields: data.fields, transitions: data.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) }));
+  return c.json(validateWorkflowShape({ allowedSubmitters: data.workflow.allowed_submitters, stages: data.stages, fields: data.fields, transitions: data.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) }));
 });
 
 app.post('/admin/workflows/:id/approve', async c => {
@@ -400,7 +443,7 @@ app.post('/admin/workflows/:id/approve', async c => {
   if (existing.status !== 'draft') return errorResponse(c, 'WORKFLOW-004', 409);
   const data = await loadWorkflow(c, workflowId);
   if (!data) return errorResponse(c, 'WORKFLOW-003', 404);
-  const validation = validateWorkflowShape({ stages: data.stages, fields: data.fields, transitions: data.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) });
+  const validation = validateWorkflowShape({ allowedSubmitters: data.workflow.allowed_submitters, stages: data.stages, fields: data.fields, transitions: data.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) });
   if (!validation.valid) return c.json({ error: 'WORKFLOW_VALIDATION', message: 'لم تكتمل إعدادات سير العمل بعد.', validation }, 400);
   try {
     await c.env.DB.batch([
@@ -448,7 +491,7 @@ app.get('/test/templates/:id', async c => {
   if (!workflowId) return errorResponse(c, 'WORKFLOW-005', 400);
   const workflow = await loadWorkflow(c, workflowId);
   if (!workflow) return errorResponse(c, 'WORKFLOW-003', 404);
-  const validation = validateWorkflowShape({ stages: workflow.stages, fields: workflow.fields, transitions: workflow.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) });
+  const validation = validateWorkflowShape({ allowedSubmitters: workflow.workflow.allowed_submitters, stages: workflow.stages, fields: workflow.fields, transitions: workflow.transitions.map((route: any) => ({ ...route, condition_json: route.condition ? JSON.stringify(route.condition) : null })) });
   return c.json({ type, workflow, validation });
 });
 

@@ -13,15 +13,16 @@ A transaction template is global and does not belong to a company.
 
 The creation model is:
 
-مقدم الطلب + بيانات المعاملة
+بيانات مقدم الطلب (من بيانات النظام عند التشغيل الحقيقي) + أسئلة وبيانات الطلب
 → تقديم المعاملة
-→ المرحلة الأولى
+→ المرحلة 1
 → المرحلة التالية حسب المسار
-→ المرحلة الأخيرة
+→ آخر مرحلة معرفة في تعريف سير العمل المحدد
+→ حالة المعاملة: مكتملة عند تنفيذ أثر الإغلاق كمكتملة
 
-Requester data is not a workflow stage.
+بيانات مقدم الطلب ليست مرحلة ولا يكتبها المستخدم يدويًا في التشغيل الحقيقي؛ تُستدعى من بيانات الحساب والموظف المرتبط.
 
-Each workflow stage has its own responsibility, duration, elements, and configured paths. Questions and decisions are represented by the same unified element model.
+Each workflow stage has its own responsibility, duration, questions/decisions, and configured paths. السؤال والقرار يستخدمان نموذج العنصر نفسه؛ نوع الإجابة هو الذي يحدد إمكانية استخدام الإجابة في المسار.
 
 The user-facing stage action is one primary action: **تمرير المعاملة**. The configured workflow determines the resulting route.
 
@@ -37,7 +38,7 @@ The Studio blocks invalid routes before approval.
 
 ## Test environment
 
-The test environment reads a template definition but executes only in browser memory. It does not create a user, employee, transaction, transaction number, attachment, audit row, or other transactional D1 record.
+The test environment reads a template definition but executes only in browser memory. It shows the requester section at the top, then every workflow stage in order. The requester name/number entered there are simulation inputs only and are never written to D1; the production transaction path will source requester data from the authenticated user and linked Phase 5 employee record.
 
 ## Company transactions
 
