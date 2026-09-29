@@ -1,42 +1,50 @@
-# HR Nexus — Phase 6 Implementation
+# HR Nexus — Phase 6
 
-Phase 6 adds a reusable, multi-tenant Workflow / Transaction Engine without replacing Phase 1–5.
+## Scope of this build
 
-## Implemented
+Phase 6 is rebuilt as a generic Workflow / Transaction Engine foundation, with the first approved product surface intentionally limited to:
 
-- Generic transaction types with global or company scope and active/inactive state.
-- Workflow definitions with versioning and active/draft/inactive states.
-- Dynamic ordered workflow stages.
-- Stage responsibility modes: company admin, role, user, direct manager, position holder, department manager/position holder, permission.
-- Configurable allowed submitters.
-- Configurable fields and stage questions.
-- Yes/No and conditional transitions.
-- Explicit next/return/complete/reject/cancel actions.
-- Return history as stage execution history; `Returned` is not a transaction status.
-- Official transaction statuses only: قيد الإجراء / مكتملة / ملغية / مرفوضة.
-- Per-company transaction numbering with server-side allocation.
-- Immutable stage execution history.
-- Transaction action/audit history.
-- Employee reference without duplicating Employee Master Data.
-- Organization/manager responsibility integration using Phase 4/5 records.
-- Stage duration and overdue calculation from timestamps.
-- Employee feedback as a configured sub-action.
-- Transaction attachment metadata table ready for the existing storage layer; no fake storage implementation was introduced because the current project has no R2/storage binding.
-- Backend tenant isolation and permission checks.
-- Super Admin-only workflow configuration endpoints.
-- Permission-aware company transaction navigation.
-- Full-page Workflow Builder, transaction list/search, creation page, and transaction detail page.
+- استوديو سير العمل
+- بيئة الاختبار المعزولة
 
-## Database
+## Product model
 
-Migration: `db/migrations/0008_phase6_workflow_engine.sql`
+A transaction template is global and does not belong to a company.
 
-Manual synchronization block: `db/phase6_sync_actual.sql`
+The creation model is:
 
-The migration uses `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and `INSERT OR IGNORE` for reference permissions. It does not drop Phase 1–5 tables or data.
+مقدم الطلب + بيانات المعاملة
+→ تقديم المعاملة
+→ المرحلة الأولى
+→ المرحلة التالية حسب المسار
+→ المرحلة الأخيرة
 
-## Important
+Requester data is not a workflow stage.
 
-The current container does not have the project's npm dependencies installed, so a complete Vite/TypeScript production build was not executed here. Syntax checks for the new Phase 6 files were performed with the available TypeScript compiler; missing package dependencies prevented a full typecheck.
+Each workflow stage has its own responsibility, duration, elements, and configured paths. Questions and decisions are represented by the same unified element model.
 
-Cloudflare Build + Deploy remains the final runtime verification step.
+The user-facing stage action is one primary action: **تمرير المعاملة**. The configured workflow determines the resulting route.
+
+Required data is validated before submit/pass and is shown beside the exact missing element.
+
+No automatic "ملاحظة إضافية" element exists. Notes appear only when the template creator adds a notes element.
+
+Conditional routing is represented as:
+
+**حقل الشرط → القيم → الأثر → الوجهة**
+
+The Studio blocks invalid routes before approval.
+
+## Test environment
+
+The test environment reads a template definition but executes only in browser memory. It does not create a user, employee, transaction, transaction number, attachment, audit row, or other transactional D1 record.
+
+## Company transactions
+
+Company Transactions are intentionally locked and are not exposed by the current UI or Phase 6 routes. They will be implemented only after Studio + Test are approved.
+
+## Preservation
+
+Phase 1–5 application code and data are preserved. No existing company, user, employee, organization, position, or valid historical data is deleted.
+
+The Phase 6 migration is non-destructive and uses the existing `hr-nexus` D1.

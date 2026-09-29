@@ -1,132 +1,290 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, GitBranch, PlayCircle, Plus, Save, ShieldCheck, Trash2, Workflow as WorkflowIcon, XCircle } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, Check, CheckCircle2, CircleAlert, Clock3, GitBranch, GripVertical, Layers3, Plus, Save, ShieldCheck, Trash2, Workflow as WorkflowIcon, X, Play, UserRound } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ErrorState, LoadingState } from '../components/State';
 
-type Stage={id:string;nameAr:string;nameEn:string;stageOrder:number;responsibleType:string;responsibleValue:string;durationMinutes:number|'';config:any};
-type Field={id:string;stageId:string|null;fieldKey:string;labelAr:string;labelEn:string;fieldType:string;required:boolean;options:any[];sortOrder:number};
-type Question={id:string;stageId:string;questionKey:string;questionAr:string;questionEn:string;questionType:string;required:boolean;options:any[];sortOrder:number};
-type Transition={id:string;fromStageId:string;toStageId:string|null;action:string;labelAr:string;condition:any;sortOrder:number};
-const uid=()=>crypto.randomUUID();
-const newStage=(order:number):Stage=>({id:uid(),nameAr:`المرحلة ${order}`,nameEn:'',stageOrder:order,responsibleType:'company_admin',responsibleValue:'',durationMinutes:'',config:{employeeFeedback:false}});
-const emptyType={nameAr:'',nameEn:'',description:'',status:'active',companyId:null as string|null};
-const responsibilityLabels:any={company_admin:'مدير الشركة',manager:'المدير المباشر',position_holder:'شاغل المنصب',department_manager:'مدير الإدارة',role:'دور محدد',user:'مستخدم محدد',permission:'صاحب صلاحية'};
-const actionLabels:any={next:'تمرير',return:'إرجاع',complete:'إكمال',reject:'رفض',cancel:'إلغاء'};
+type FieldType='text'|'textarea'|'number'|'date'|'datetime'|'boolean'|'select'|'multiselect'|'employee'|'organization_unit'|'position'|'user';
+type RespType='employee_owner'|'direct_manager'|'department_manager'|'position_holder'|'role'|'permission'|'company_admin'|'specific_user';
+type ActionType='next'|'return'|'complete'|'reject'|'cancel';
+type Field={id:string;stageId:string|null;fieldKey:string;labelAr:string;labelEn:string;fieldType:FieldType;required:boolean;options:string[];sortOrder:number;active:boolean};
+type Stage={id:string;nameAr:string;nameEn:string;stageOrder:number;responsibleType:RespType;responsibleValue:string;durationMinutes:number|null;employeeFeedback:boolean};
+type Route={id:string;fromStageId:string;toStageId:string|null;action:ActionType;condition:{fieldKey:string;values:string[]}|null;sortOrder:number};
+type ValidationItem={message:string;stageId?:string;fieldKey?:string;transitionId?:string};
+type Template={id:string;name_ar:string;description:string|null;status:'active'|'inactive';latest_version:number|null;active_version:number|null;draft_id:string|null;stage_count?:number;requester_field_count?:number};
+
+const fieldLabels:Record<FieldType,string>={text:'نص',textarea:'نص طويل',number:'رقم',date:'تاريخ',datetime:'تاريخ ووقت',boolean:'نعم / لا',select:'اختيار واحد',multiselect:'اختيارات متعددة',employee:'موظف',organization_unit:'وحدة تنظيمية',position:'منصب',user:'مستخدم'};
+const respLabels:Record<RespType,string>={employee_owner:'الموظف المرتبط',direct_manager:'المدير المباشر',department_manager:'مدير الإدارة',position_holder:'شاغل المنصب',role:'دور وظيفي',permission:'حامل صلاحية',company_admin:'مدير الشركة',specific_user:'مستخدم محدد'};
+const actionLabels:Record<ActionType,string>={next:'انتقل',return:'ارجع',complete:'تنتهي مكتملة',reject:'ترفض',cancel:'تلغى'};
+
+const newId=()=>crypto.randomUUID();
+function slugKey(label:string,index:number){
+  const normalized=label.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+  return normalized?`${normalized}_${index+1}`:`element_${index+1}`;
+}
+function blankField(stageId:string|null,order:number):Field{return{id:newId(),stageId,fieldKey:slugKey('',order),labelAr:'',labelEn:'',fieldType:'text',required:false,options:[],sortOrder:order,active:true};}
+function blankStage(order:number):Stage{return{id:newId(),nameAr:`المرحلة ${order}`,nameEn:`Stage ${order}`,stageOrder:order,responsibleType:'company_admin',responsibleValue:'',durationMinutes:null,employeeFeedback:false};}
+function blankRoute(fromStageId:string,action:ActionType,toStageId:string|null,sortOrder:number):Route{return{id:newId(),fromStageId,toStageId,action,condition:null,sortOrder};}
+function parseOptions(value:string){return value.split(/[,،\n]/).map(x=>x.trim()).filter(Boolean);}
+function ordered<T extends {sortOrder:number}>(items:T[]){return [...items].sort((a,b)=>a.sortOrder-b.sortOrder);}
 
 export function WorkflowAdmin(){
- const [searchParams]=useSearchParams();
- const [types,setTypes]=useState<any[]>([]),[companies,setCompanies]=useState<any[]>([]),[typeId,setTypeId]=useState(''),[type,setType]=useState<any>(null),[allowedSubmitters,setAllowedSubmitters]=useState(''),[stages,setStages]=useState<Stage[]>([newStage(1)]),[fields,setFields]=useState<Field[]>([]),[questions,setQuestions]=useState<Question[]>([]),[transitions,setTransitions]=useState<Transition[]>([]),[typeForm,setTypeForm]=useState(emptyType),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(''),[activeStageId,setActiveStageId]=useState(''),[publishSelection,setPublishSelection]=useState<string[]>([]),[creationStep,setCreationStep]=useState<'requester'|'stage'|null>(null),[draftWorkflowId,setDraftWorkflowId]=useState('');
- const loadTypes=async()=>{setLoading(true);setError('');try{const [t,c]=await Promise.all([api<any>('/api/workflows/admin/types'),api<any>('/api/workflows/admin/companies')]);setTypes(t.items);setCompanies(c.items);}catch{setError('تعذر تحميل إعدادات سير العمل.')}finally{setLoading(false)}};
- useEffect(()=>{void loadTypes()},[]);
- useEffect(()=>{const id=searchParams.get('typeId');if(id)void loadWorkflow(id)},[searchParams]);
- async function loadWorkflow(id:string){setTypeId(id);setMessage('');setError('');if(!id){setType(null);setTypeForm({...emptyType});setAllowedSubmitters('');setStages([newStage(1)]);setFields([]);setQuestions([]);setTransitions([]);setActiveStageId('');setPublishSelection([]);setCreationStep(null);setDraftWorkflowId('');return;}try{const meta=await api<any>(`/api/workflows/admin/types/${id}`);setType(meta.type);setTypeForm({nameAr:meta.type.name_ar,nameEn:meta.type.name_en||'',description:meta.type.description||'',status:meta.type.status,companyId:null});const active=meta.workflow?.find((x:any)=>x.status==='active')||meta.workflow?.[0];if(active){const d=await api<any>(`/api/workflows/admin/workflows/${active.id}`);const ss=d.stages.map((x:any)=>({id:x.id,nameAr:x.name_ar,nameEn:x.name_en||'',stageOrder:x.stage_order,responsibleType:x.responsible_type,responsibleValue:x.responsible_value||'',durationMinutes:x.duration_minutes??'',config:x.config||{}}));setAllowedSubmitters((d.workflow?.allowed_submitters||[]).join(', '));setStages(ss);setActiveStageId(ss[0]?.id||'');setFields(d.fields.map((x:any)=>({id:x.id,stageId:x.stage_id||null,fieldKey:x.field_key,labelAr:x.label_ar,labelEn:x.label_en||'',fieldType:x.field_type,required:Boolean(x.required),options:x.options||[],sortOrder:x.sort_order})));setQuestions(d.questions.map((x:any)=>({id:x.id,stageId:x.stage_id,questionKey:x.question_key,questionAr:x.question_ar,questionEn:x.question_en||'',questionType:x.question_type,required:Boolean(x.required),options:x.options||[],sortOrder:x.sort_order})));setTransitions(d.transitions.map((x:any)=>({id:x.id,fromStageId:x.from_stage_id,toStageId:x.to_stage_id||null,action:x.action,labelAr:x.label_ar,condition:x.condition||null,sortOrder:x.sort_order})));}else{setStages([newStage(1)]);setFields([]);setQuestions([]);setTransitions([]);setActiveStageId('');}}catch{setError('تعذر تحميل تعريف سير العمل.')}}
- async function createType(){setBusy(true);setError('');try{const d=await api<any>('/api/workflows/admin/types',{method:'POST',body:JSON.stringify({...typeForm,companyId:null})});const firstStage=newStage(1);const w=await api<any>('/api/workflows/admin/workflows',{method:'POST',body:JSON.stringify({transactionTypeId:d.id,status:'draft',description:typeForm.description||null,allowedSubmitters:allowedSubmitters?allowedSubmitters.split(',').map(x=>x.trim()).filter(Boolean):[],stages:[{...firstStage,active:true,durationMinutes:null}],fields:[],questions:[],transitions:[]})});setDraftWorkflowId(w.id);await loadTypes();await loadWorkflow(d.id);setCreationStep('requester');setMessage('تم حفظ اسم المعاملة. الآن عرّف عناصر مقدم الطلب قبل المرحلة الأولى.')}catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء المعاملة.')}finally{setBusy(false)}}
- async function saveDraftWorkflow(status:'draft'|'active'='draft'){if(!draftWorkflowId||!typeId)return;await api(`/api/workflows/admin/workflows/${draftWorkflowId}`,{method:'PATCH',body:JSON.stringify({transactionTypeId:typeId,status,description:typeForm.description||null,allowedSubmitters:allowedSubmitters.split(',').map(x=>x.trim()).filter(Boolean),stages:stages.map((s,i)=>({...s,stageOrder:i+1,durationMinutes:s.durationMinutes===''?null:Number(s.durationMinutes),config:s.config||{}})),fields,questions,transitions:effectiveTransitions})})}
- async function saveRequesterAndOpenStage(){setBusy(true);setError('');try{await saveDraftWorkflow('draft');setCreationStep('stage');setActiveStageId(stages[0]?.id||'');setMessage('تم حفظ عناصر مقدم الطلب. الآن صمّم المرحلة الأولى.')}catch(e){setError(e instanceof Error?e.message:'تعذر حفظ عناصر مقدم الطلب.')}finally{setBusy(false)}}
- async function saveStageAndNext(){setBusy(true);setError('');try{await saveDraftWorkflow('draft');const idx=stageOptions.findIndex(s=>s.id===currentStage?.id);if(idx===stageOptions.length-1){addStage();setMessage('تم حفظ المرحلة. أُضيفت المرحلة التالية تلقائيًا.')}else{setActiveStageId(stageOptions[idx+1].id);setMessage('تم حفظ المرحلة والانتقال للمرحلة التالية.')}}catch(e){setError(e instanceof Error?e.message:'تعذر حفظ المرحلة.')}finally{setBusy(false)}}
- async function saveType(){if(!typeId)return;setBusy(true);setError('');try{await api(`/api/workflows/admin/types/${typeId}`,{method:'PATCH',body:JSON.stringify(typeForm)});await loadTypes();setMessage('تم حفظ بيانات النوع.')}catch{setError('تعذر حفظ بيانات النوع.')}finally{setBusy(false)}}
- async function clearAllTransactions(){
-  const ok=window.confirm('سيتم حذف كل المعاملات الفعلية وكل أنواع المعاملات الجاهزة وكل نسخ سير العمل والحقول والأسئلة والمسارات وتسلسل الأرقام من جميع الشركات. ستبقى الشركات والموظفون والصلاحيات والجداول كما هي. لا يمكن التراجع عن هذا الإجراء. هل تريد البدء من الصفر؟');
-  if(!ok)return;
-  setBusy(true);setError('');setMessage('');
-  try{const d=await api<any>('/api/workflows/admin/transactions/clear',{method:'POST',body:JSON.stringify({})});setMessage(`تم تصفير محرك المعاملات بالكامل. حُذفت ${Number(d.deletedCount||0)} معاملة اختبارية/فعلية مع سجل مراحلها وإجاباتها، وبقيت قوالب المعاملات وسير العمل كما هي.`);}catch(e){setError(e instanceof Error?e.message:'تعذر تنظيف المعاملات.')}finally{setBusy(false)}
- }
- async function createFullTemplate(){if(!typeId)return;setBusy(true);setError('');try{await api('/api/workflows/admin/workflows/full-template',{method:'POST',body:JSON.stringify({transactionTypeId:typeId})});await loadWorkflow(typeId);setMessage('تم تجهيز مسار اختبار متكامل يمكنك تشغيله من بيئة الاختبار.')}catch(e){setError(e instanceof Error?e.message:'تعذر تجهيز المسار.')}finally{setBusy(false)}}
- async function publishToCompanies(){const ids=companies.filter(c=>publishSelection.includes(c.id)).map(c=>c.id);if(!typeId||!ids.length)return;setBusy(true);setError('');try{const d=await api<any>(`/api/workflows/admin/types/${typeId}/publish`,{method:'POST',body:JSON.stringify({companyIds:ids})});const published=d.results?.filter((x:any)=>x.status==='published').length||0;const existing=d.results?.filter((x:any)=>x.status==='exists').length||0;setPublishSelection([]);setMessage(`تم نسخ المعاملة إلى ${published} شركة${existing?`، و${existing} شركة لديها نسخة مسبقًا`:''}.`);await loadTypes();}catch(e){setError(e instanceof Error?e.message:'تعذر نسخ المعاملة للشركات.')}finally{setBusy(false)}}
- async function saveWorkflow(){if(!typeId)return;const blocking=validation.filter(x=>x.level==='error');if(blocking.length){setError('لا يمكن النشر قبل معالجة الأخطاء الظاهرة في فحص الجودة.');setActiveStageId(blocking[0].stageId||stages[0]?.id||'');return;}setBusy(true);setError('');try{if(draftWorkflowId)await saveDraftWorkflow('active');else await api('/api/workflows/admin/workflows',{method:'POST',body:JSON.stringify({transactionTypeId:typeId,status:'active',description:typeForm.description||null,allowedSubmitters:allowedSubmitters.split(',').map(x=>x.trim()).filter(Boolean),stages:stages.map((s,i)=>({...s,stageOrder:i+1,durationMinutes:s.durationMinutes===''?null:Number(s.durationMinutes),config:s.config||{}})),fields,questions,transitions:effectiveTransitions})});setCreationStep(null);setDraftWorkflowId('');setMessage('تم حفظ المعاملة ونشر سير العمل. يمكنك الآن اختبارها أو نسخها إلى الشركات.');await loadTypes();}catch(e){setError(e instanceof Error?e.message:'تعذر حفظ سير العمل.')}finally{setBusy(false)}}
- const stageOptions=stages.slice().sort((a,b)=>a.stageOrder-b.stageOrder);
- const selectedType=useMemo(()=>types.find(x=>x.id===typeId),[types,typeId]);
- const currentStage=stageOptions.find(s=>s.id===activeStageId)||stageOptions[0]; const stageOrderOf=(stageId:string|null)=>stageOptions.find(s=>s.id===stageId)?.stageOrder??1;
- const effectiveTransitions=useMemo(()=>{
-  const out=transitions.map(t=>({...t}));
-  stageOptions.forEach((s,i)=>{
-   const next=stageOptions[i+1];
-   if(!next)return;
-   const automatic=out.find(t=>t.fromStageId===s.id&&t.action==='next'&&!t.condition);
-   if(automatic) automatic.toStageId=next.id;
-   else out.push({id:uid(),fromStageId:s.id,toStageId:next.id,action:'next',labelAr:'تمرير المعاملة',condition:null,sortOrder:out.length});
-  });
-  return out;
- },[stageOptions,transitions]);
- const validation=useMemo(()=>{const out:any[]=[];const keys=new Set([...fields.map(f=>f.fieldKey),...questions.map(q=>q.questionKey)]);stageOptions.forEach((s,i)=>{if(!s.nameAr.trim())out.push({level:'error',stageId:s.id,title:'اسم المرحلة مفقود',detail:'اكتب اسمًا واضحًا للمرحلة حتى تظهر للمستخدمين.',focus:'stage'});if(['role','user','position_holder','permission'].includes(s.responsibleType)&&!s.responsibleValue.trim())out.push({level:'error',stageId:s.id,title:'المسؤول غير محدد',detail:`اختر قيمة لـ «${responsibilityLabels[s.responsibleType]}».`,focus:'stage'});const outgoing=effectiveTransitions.filter(t=>t.fromStageId===s.id);if(outgoing.some(t=>t.action==='next'&&t.condition)&&!outgoing.some(t=>t.action==='next'&&!t.condition))out.push({level:'error',stageId:s.id,title:'الشرط يحتاج مسارًا احتياطيًا',detail:'إذا لم يتحقق الشرط، يجب أن يكون هناك مسار تلقائي للمرحلة التالية.',focus:'transitions'});outgoing.forEach(t=>{if(!t.toStageId&&['next','return'].includes(t.action))out.push({level:'error',stageId:s.id,title:'انتقال بلا وجهة',detail:`المسار «${t.labelAr||actionLabels[t.action]}» يحتاج مرحلة وجهة.`,focus:'transitions'});const src=t.condition?.source;if(src){const key=src.replace(/^(question|field)\./,'');const info=(src.startsWith('question.')?questions.find(q=>q.questionKey===key):fields.find(f=>f.fieldKey===key));if(!keys.has(key))out.push({level:'error',stageId:s.id,title:'شرط غير مرتبط',detail:`المصدر «${src}» غير موجود ضمن الحقول أو الأسئلة.`,focus:'transitions'});else if(info&&((info as any).stageId?stageOrderOf((info as any).stageId):1)>s.stageOrder)out.push({level:'error',stageId:s.id,title:'الشرط يشير إلى مرحلة مستقبلية',detail:'يمكن للشرط استخدام حقل أو سؤال من نفس المرحلة أو مرحلة سابقة فقط.',focus:'transitions'});}})});if(stageOptions.length===0)out.push({level:'error',title:'لا توجد مراحل',detail:'أضف مرحلة واحدة على الأقل.'});return out},[stageOptions,fields,questions,effectiveTransitions]);
- const errors=validation.filter(x=>x.level==='error'),warnings=validation.filter(x=>x.level==='warning');
- function addStage(){setStages(v=>{const n=[...v,newStage(v.length+1)];const previous=n[n.length-2];const next=n[n.length-1];setActiveStageId(next.id);setTransitions(ts=>{const existing=ts.find(t=>t.fromStageId===previous?.id&&t.action==='next');if(!previous||existing)return ts;return [...ts,{id:uid(),fromStageId:previous.id,toStageId:next.id,action:'next',labelAr:'تمرير المعاملة',condition:null,sortOrder:ts.length}]});return n})}
- function moveStage(i:number,dir:number){setStages(v=>{const n=[...v];const j=i+dir;if(j<0||j>=n.length)return v;[n[i],n[j]]=[n[j],n[i]];return n.map((x,k)=>({...x,stageOrder:k+1}))})}
- function addField(stageId:string|null=null){setFields(v=>[...v,{id:uid(),stageId,fieldKey:`field_${v.length+1}`,labelAr:'حقل جديد',labelEn:'',fieldType:'text',required:false,options:[],sortOrder:v.length}])}
- function addQuestion(stageId:string){setQuestions(v=>[...v,{id:uid(),stageId,questionKey:`question_${v.length+1}`,questionAr:'سؤال جديد',questionEn:'',questionType:'yes_no',required:true,options:[],sortOrder:v.length}])}
- function addTransition(stageId:string){const next=stageOptions.find(s=>s.stageOrder===((stageOptions.find(x=>x.id===stageId)?.stageOrder||0)+1));setTransitions(v=>[...v,{id:uid(),fromStageId:stageId,toStageId:next?.id||null,action:'next',labelAr:'مسار مشروط',condition:{source:conditionSources[0]?.key||'',operator:'equals',value:''},sortOrder:v.length}])}
- const conditionSources=useMemo(()=>{
-  const currentOrder=currentStage?.stageOrder??1;
-  const list:any[]=[];
-  fields.forEach(f=>{const order=f.stageId?stageOrderOf(f.stageId):0;if(f.stageId?order<=currentOrder:true)list.push({key:`field.${f.fieldKey}`,label:f.labelAr||f.fieldKey,type:f.fieldType,stageOrder:order,stageName:f.stageId?(stageOptions.find(s=>s.stageOrder===order)?.nameAr||'المرحلة'):'بيانات مقدم الطلب',options:f.options||[]});});
-  questions.forEach(q=>{const order=stageOrderOf(q.stageId);if(order<=currentOrder)list.push({key:`question.${q.questionKey}`,label:q.questionAr||q.questionKey,type:q.questionType,stageOrder:order,stageName:stageOptions.find(s=>s.stageOrder===order)?.nameAr||'المرحلة',options:q.options||[]});});
-  return list.sort((a,b)=>a.stageOrder-b.stageOrder||a.label.localeCompare(b.label,'ar'));
- },[fields,questions,stageOptions,currentStage]);
- const sourceInfo=(source:string)=>conditionSources.find(x=>x.key===source);
- const conditionOperators=(source:string)=>{const info=sourceInfo(source);if(!info)return [{value:'equals',label:'يساوي'},{value:'not_equals',label:'لا يساوي'}];if(info.type==='yes_no'||info.type==='boolean')return [{value:'equals',label:'يساوي'},{value:'not_equals',label:'لا يساوي'},{value:'is_true',label:'نعم'},{value:'is_false',label:'لا'}];if(info.type==='select'||info.type==='multiselect')return [{value:'equals',label:'يساوي'},{value:'not_equals',label:'لا يساوي'},{value:'contains',label:'يحتوي'}];return [{value:'equals',label:'يساوي'},{value:'not_equals',label:'لا يساوي'},{value:'contains',label:'يحتوي'}]};
- const updateCondition=(id:string,patch:any)=>setTransitions(v=>v.map(x=>x.id===id?{...x,condition:{...(x.condition||{}),...patch}}:x));
- const clearCondition=(id:string)=>setTransitions(v=>v.map(x=>x.id===id?{...x,condition:null}:x));
- const currentTransitions=transitions.filter(t=>t.fromStageId===currentStage?.id); const advancedTransitions=currentTransitions.filter(t=>Boolean(t.condition)||t.action!=='next');
+  const params=useParams<{typeId?:string}>();
+  const navigate=useNavigate();
+  const [templates,setTemplates]=useState<Template[]>([]);
+  const [listLoading,setListLoading]=useState(true),[listError,setListError]=useState(false);
+  const [mode,setMode]=useState<'list'|'create'|'builder'>(params.typeId==='new'?'create':params.typeId?'builder':'list');
+  const [type,setType]=useState<any>(null),[workflow,setWorkflow]=useState<any>(null),[loading,setLoading]=useState(false);
+  const [error,setError]=useState(''),[saving,setSaving]=useState(false),[approving,setApproving]=useState(false);
+  const [validation,setValidation]=useState<{valid:boolean;errors:ValidationItem[];warnings:ValidationItem[]}|null>(null);
+  const [selectedStage,setSelectedStage]=useState('');
+  const [nameAr,setNameAr]=useState(''),[nameEn,setNameEn]=useState(''),[description,setDescription]=useState('');
+  const [submitters,setSubmitters]=useState<string[]>(['self']);
+  const [stages,setStages]=useState<Stage[]>([]),[fields,setFields]=useState<Field[]>([]),[routes,setRoutes]=useState<Route[]>([]);
+  const stageRefs=useRef<Record<string,HTMLElement|null>>({});
+  const loadedTypeRef=useRef('');
 
- if(loading)return <div className="panel-empty">جاري تحميل استوديو سير العمل...</div>;
- if(!typeId)return <div className="workflow-builder-page">
-  <div className="page-header"><div><div className="eyebrow">إدارة المنصة · Workflow Studio</div><h1>استوديو سير العمل</h1><p>أنشئ قوالب المعاملات، اختبرها، ثم انشر النسخة التي تعتمدها إلى الشركات.</p></div><div className="header-actions"><button className="btn primary" onClick={()=>setTypeId('__new__')}><Plus size={16}/>إنشاء معاملة</button><Link className="btn secondary" to="/platform/workflows/test"><PlayCircle size={16}/>اختبار المعاملات</Link><button className="btn danger" onClick={()=>void clearAllTransactions()} disabled={busy}><Trash2 size={16}/>تنظيف جميع المعاملات</button><Link className="btn secondary" to="/platform/company-transactions"><WorkflowIcon size={16}/>معاملات الشركات</Link></div></div>
-  {error&&<div className="login-error page-error">{error}</div>}{message&&<div className="success-banner">{message}</div>}
-  <section className={`workflow-hero panel ${creationStep==='stage'?'creation-stage-hero':''}`}><div><span className="workflow-kicker">Studio</span><h2>قوالب المعاملات</h2><p>هذه القائمة هي نقطة البداية. افتح أي معاملة للتعديل أو الاختبار أو النسخ إلى شركة.</p></div><div className="workflow-health"><div><strong>{types.filter(x=>x.company_id==null).length}</strong><span>قوالب الاستوديو</span></div><div><strong>{types.filter(x=>x.company_id==null&&x.status==='active').length}</strong><span>نشطة</span></div><div><strong>{types.filter(x=>x.company_id==null&&x.status!=='active').length}</strong><span>غير نشطة</span></div></div></section>
-  <section className="panel">
-   <div className="panel-head"><div><h3>قائمة المعاملات</h3><p>النسخة هنا عامة داخل الاستوديو ولا ترتبط بشركة.</p></div><button className="btn secondary" onClick={()=>setTypeId('__new__')}><Plus size={15}/>معاملة جديدة</button></div>
-   {types.filter(x=>x.company_id==null).length===0?<div className="panel-empty"><WorkflowIcon size={28}/><h3>لا توجد معاملات بعد</h3><p>ابدأ بإنشاء أول قالب، ثم انتقل مباشرة إلى المرحلة الأولى.</p><button className="btn primary" onClick={()=>setTypeId('__new__')}><Plus size={15}/>إنشاء أول معاملة</button></div>:<div className="table-wrap"><table><thead><tr><th>المعاملة</th><th>الإصدار</th><th>الحالة</th><th>آخر تعديل</th><th>الإجراءات</th></tr></thead><tbody>{types.filter(x=>x.company_id==null).map(x=><tr key={x.id}><td><strong>{x.name_ar}</strong>{x.description&&<div className="mono">{x.description}</div>}</td><td>{x.workflow_version?`v${x.workflow_version}`:'مسودة'}</td><td><span className={`badge ${x.status==='active'?'success':'neutral'}`}>{x.status==='active'?'نشطة':'غير نشطة'}</span></td><td>{x.updated_at?new Date(x.updated_at).toLocaleDateString('ar-SA'):'—'}</td><td><div className="table-actions"><button className="table-link" onClick={()=>void loadWorkflow(x.id)}>فتح الاستوديو</button><Link className="table-link" to={`/platform/workflows/test/${x.id}`}><PlayCircle size={14}/>اختبار</Link></div></td></tr>)}</tbody></table></div>}
-  </section>
- </div>;
- if(typeId==='__new__')return <div className="workflow-builder-page">
-  <div className="page-header"><div><div className="eyebrow">استوديو سير العمل · معاملة جديدة</div><h1>إنشاء معاملة</h1><p>أدخل المعلومات الأساسية فقط. بعد الإنشاء ستنتقل مباشرة إلى المرحلة الأولى.</p></div><div className="header-actions"><button className="btn secondary" onClick={()=>void loadWorkflow('')}><ChevronLeft size={16}/>العودة للقائمة</button></div></div>
-  {error&&<div className="login-error page-error">{error}</div>}
-  <section className="panel creation-card"><div className="creation-intro"><span className="workflow-kicker">الخطوة 1</span><h2>ما هي المعاملة؟</h2><p>لا تختار شركة هنا. هذا قالب استوديو، وسيتم تحديد الشركات لاحقًا عند النشر.</p></div>
-   <div className="form-grid"><label className="form-field"><span>اسم المعاملة *</span><input autoFocus value={typeForm.nameAr} onChange={e=>setTypeForm({...typeForm,nameAr:e.target.value})} placeholder="مثال: طلب سلفة"/></label><label className="form-field"><span>وصف مختصر</span><input value={typeForm.description} onChange={e=>setTypeForm({...typeForm,description:e.target.value})} placeholder="اختياري"/></label></div>
-   <div className="submitter-choice-block"><div><strong>من يستطيع تقديم المعاملة؟</strong><small>يمكن تغيير هذا الإعداد لاحقًا من داخل الاستوديو.</small></div><div className="submitter-choice-grid"><label className={`company-publish-option ${allowedSubmitters.length===0?'selected':''}`}><input type="checkbox" checked={allowedSubmitters.length===0} onChange={()=>setAllowedSubmitters('')}/><span><strong>أي مستخدم لديه صلاحية إنشاء المعاملة</strong><small>استخدام صلاحية transaction.create</small></span></label><label className={`company-publish-option ${allowedSubmitters.includes('company_admin')?'selected':''}`}><input type="checkbox" checked={allowedSubmitters.includes('company_admin')} onChange={e=>setAllowedSubmitters(e.target.checked?'company_admin':'')}/><span><strong>مدير الشركة</strong><small>Company Admin</small></span></label></div></div>
-   <div className="form-actions creation-actions"><button className="btn primary" disabled={busy||!typeForm.nameAr.trim()} onClick={()=>void createType()}><Plus size={16}/>إنشاء والانتقال للمرحلة الأولى</button></div>
-  </section>
- </div>;
- if(creationStep==='requester')return <div className="workflow-builder-page">
-  <div className="page-header"><div><div className="eyebrow">استوديو سير العمل · {typeForm.nameAr}</div><h1>عناصر مقدم الطلب</h1><p>هذه البيانات يعبئها مقدم الطلب عند إنشاء المعاملة، قبل دخولها المرحلة الأولى.</p></div><div className="header-actions"><button className="btn secondary" onClick={()=>void loadWorkflow('')}><ChevronLeft size={16}/>إلغاء الإنشاء</button></div></div>
-  {error&&<div className="login-error page-error">{error}</div>}{message&&<div className="success-banner">{message}</div>}
-  <div className="workflow-stepper panel"><div className="workflow-step done"><span>1</span><strong>بيانات المعاملة</strong></div><div className="workflow-step active"><span>2</span><strong>عناصر مقدم الطلب</strong></div><div className="workflow-step"><span>3</span><strong>المرحلة الأولى</strong></div><div className="workflow-step"><span>4</span><strong>باقي المراحل</strong></div></div>
-  <section className="panel workflow-subpanel"><div className="panel-head"><div><h3>البيانات التي يرسلها مقدم الطلب</h3><p>الحقول التي تظهر أثناء إنشاء المعاملة قبل دخولها المرحلة الأولى.</p></div><button className="btn secondary" onClick={()=>addField(null)}><Plus size={15}/>إضافة عنصر</button></div>
-   {fields.filter(f=>!f.stageId).length===0?<div className="empty-soft">لا توجد عناصر بعد. أضف فقط البيانات التي يجب أن تظهر عند تقديم المعاملة.</div>:fields.filter(f=>!f.stageId).map(f=><div className="workflow-config-row" key={f.id}><input value={f.fieldKey} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,fieldKey:e.target.value}:x))} placeholder="field_key"/><input value={f.labelAr} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,labelAr:e.target.value}:x))} placeholder="اسم العنصر"/><select value={f.fieldType} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,fieldType:e.target.value}:x))}><option value="text">نص</option><option value="textarea">نص طويل</option><option value="number">رقم</option><option value="date">تاريخ</option><option value="datetime">تاريخ ووقت</option><option value="boolean">نعم/لا</option><option value="select">اختيار</option><option value="multiselect">اختيارات متعددة</option><option value="employee">موظف</option><option value="organization_unit">وحدة تنظيمية</option><option value="position">منصب</option><option value="user">مستخدم</option></select><label className="mini-check"><input type="checkbox" checked={f.required} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,required:e.target.checked}:x))}/>مطلوب</label><button className="icon-btn" onClick={()=>setFields(v=>v.filter(x=>x.id!==f.id))}><Trash2 size={15}/></button></div>)}
-  </section>
-  <div className="form-actions creation-actions"><button className="btn primary" disabled={busy} onClick={()=>void saveRequesterAndOpenStage()}><Save size={16}/>حفظ والانتقال للمرحلة الأولى</button></div>
- </div>;
- return <div className="workflow-builder-page">
-  <div className="page-header"><div><div className="eyebrow">إدارة المنصة · Workflow Studio</div><h1>{creationStep==='stage'?`بناء: ${typeForm.nameAr}`:'استوديو سير العمل'}</h1><p>{creationStep==='stage'?'هذه مرحلة جديدة مستقلة. حدّد المسؤول والبيانات والأسئلة والمرفقات ثم احفظ للانتقال للمرحلة التالية.':'صمّم المعاملة مرحلةً بمرحلة، افحصها ذكيًا، ثم اختبرها قبل نشرها.'}</p></div><div className="header-actions">{creationStep==='stage'?<><button className="btn secondary" onClick={()=>void loadWorkflow("")}><ChevronLeft size={16}/>الخروج إلى الاستوديو</button><button className="btn primary" disabled={busy} onClick={()=>void saveStageAndNext()}><Save size={16}/>حفظ المرحلة والانتقال للتالية</button></>:<><button className="btn secondary" onClick={()=>void loadWorkflow("")}><Plus size={16}/>إنشاء معاملة</button><Link className="btn secondary" to="/platform/workflows/test"><PlayCircle size={16}/>اختبار معاملة</Link><button className="btn danger" onClick={()=>void clearAllTransactions()} disabled={busy}><Trash2 size={16}/>مسح بيانات المعاملات</button>{typeId&&<><button className="btn secondary" disabled={busy} onClick={()=>void createFullTemplate()}><PlayCircle size={16}/>تجهيز مسار اختبار</button><button className="btn primary" disabled={busy} onClick={()=>void saveWorkflow()}><Save size={16}/>{busy?'جارٍ النشر...':'نشر نسخة جديدة'}</button></>}</>}</div></div>
-  <div className={`workflow-mode-strip ${creationStep==='stage'?'creation-stage-strip':''}`}><button className="workflow-mode-card active" onClick={()=>void loadWorkflow("")}><Plus size={17}/><span><strong>إنشاء معاملة</strong><small>ابنِ القالب وراح تبقى داخل الاستوديو</small></span></button><Link className="workflow-mode-card" to="/platform/workflows/test"><PlayCircle size={17}/><span><strong>اختبار معاملة</strong><small>اختر معاملة وجرب خط سيرها A-Z</small></span></Link><Link className="workflow-mode-card" to="/platform/company-transactions"><WorkflowIcon size={17}/><span><strong>معاملات الشركات</strong><small>ادخل الشركة وشاهد معاملاتها ونسخها المستقلة</small></span></Link></div>
-  {creationStep==='stage'&&<div className="workflow-stepper panel"><div className="workflow-step done"><span>1</span><strong>بيانات المعاملة</strong></div><div className="workflow-step done"><span>2</span><strong>عناصر مقدم الطلب</strong></div><div className="workflow-step active"><span>3</span><strong>المرحلة الجديدة {currentStage?.stageOrder||1}</strong></div><div className="workflow-step"><span>4</span><strong>المراحل التالية</strong></div></div>}
-  {error&&<div className="login-error page-error">{error}</div>}{message&&<div className="success-banner">{message}</div>}
-  <section className="workflow-hero panel"><div><span className="workflow-kicker">بيئة تصميم آمنة</span><h2>من الفكرة إلى معاملة تعمل فعليًا</h2><p>كل مرحلة لها مسؤول وحقول وأسئلة ومرفقات ومسارات، والمدة اختيارية. لا تحتاج إلى كتابة منطق برمجي لكل معاملة.</p></div><div className="workflow-health"><div><strong>{errors.length?errors.length:'✓'}</strong><span>{errors.length?'أخطاء تمنع النشر':'جاهز مبدئيًا'}</span></div><div><strong>{warnings.length}</strong><span>تنبيهات</span></div><div><strong>{stageOptions.length}</strong><span>مراحل</span></div></div></section>
-  <div className={`workflow-studio-grid ${creationStep==='stage'?'creation-stage-mode':''}`}>
-   {creationStep!=='stage'&&<aside className="workflow-sidebar panel"><div className="panel-head"><div><h3>مخطط المسار</h3><p>اضغط على أي مرحلة لتحريرها.</p></div><button className="icon-btn" onClick={addStage}><Plus size={16}/></button></div>
-    {stageOptions.map((s,i)=><button key={s.id} className={`workflow-stage-nav ${currentStage?.id===s.id?'active':''}`} onClick={()=>setActiveStageId(s.id)}><span className="stage-number">{s.stageOrder}</span><span><strong>{s.nameAr||'مرحلة بدون اسم'}</strong><small>{responsibilityLabels[s.responsibleType]||s.responsibleType}</small></span><ChevronLeft size={15}/></button>)}
-    {typeId&&<div className="workflow-sidebar-footer"><ShieldCheck size={15}/><span>نسخ الـWorkflow محفوظة برقم إصدار مستقل.</span></div>}
-   </aside>}
-   <main className="workflow-main">
-    {creationStep!=='stage'&&<section className="panel workflow-type-card"><div className="panel-head"><div><h3>تعريف المعاملة</h3><p>هذا هو القالب الذي سيُستخدم عند إنشاء المعاملة.</p></div><WorkflowIcon size={19}/></div>
-      <div className="studio-type-header"><div><span className="workflow-kicker">قالب الاستوديو</span><h2>{typeForm.nameAr}</h2><p>هذا القالب مستقل عن الشركات. النشر إلى الشركات يتم من زر «نسخ إلى شركة».</p></div><div className="studio-type-actions"><Link className="btn secondary" to={`/platform/workflows/test/${typeId}`}><PlayCircle size={15}/>اختبار</Link><button className="btn secondary" disabled={busy} onClick={()=>void saveType()}><Save size={15}/>حفظ البيانات</button></div></div>
-      <div className="form-grid" style={{marginTop:12}}><label className="form-field"><span>اسم المعاملة</span><input value={typeForm.nameAr} onChange={e=>setTypeForm({...typeForm,nameAr:e.target.value})}/></label><label className="form-field"><span>الاسم بالإنجليزية</span><input value={typeForm.nameEn} onChange={e=>setTypeForm({...typeForm,nameEn:e.target.value})}/></label></div>
-      <label className="form-field" style={{marginTop:12}}><span>الوصف</span><textarea value={typeForm.description} onChange={e=>setTypeForm({...typeForm,description:e.target.value})} rows={2}/></label>
-      {!typeId?<div className="form-actions" style={{marginTop:12}}><button className="btn primary" disabled={busy||!typeForm.nameAr.trim()} onClick={()=>void createType()}><Plus size={15}/>إنشاء نوع المعاملة</button></div>:<div className="submitter-choice-block compact"><div><strong>مقدمو الطلب</strong><small>من يحق له بدء هذه المعاملة داخل الشركة.</small></div><div className="submitter-choice-grid"><label className={`company-publish-option ${allowedSubmitters.length===0?'selected':''}`}><input type="checkbox" checked={allowedSubmitters.length===0} onChange={()=>setAllowedSubmitters('')}/><span><strong>أي مستخدم لديه صلاحية الإنشاء</strong><small>transaction.create</small></span></label><label className={`company-publish-option ${allowedSubmitters.includes('company_admin')?'selected':''}`}><input type="checkbox" checked={allowedSubmitters.includes('company_admin')} onChange={e=>setAllowedSubmitters(e.target.checked?'company_admin':'')}/><span><strong>مدير الشركة</strong><small>Company Admin</small></span></label></div></div>}
-    </section>}
-    {typeId&&creationStep!=='stage'&&<section className="panel workflow-publish-panel"><div className="panel-head"><div><h3>نسخ المعاملة إلى الشركات</h3><p>{typeForm.companyId?'هذه نسخة مستقلة داخل شركة، ويمكن تعديل سيرها دون التأثير على الشركات الأخرى.':'اختر الشركات التي تريد إنشاء نسخة مستقلة من هذا القالب داخلها.'}</p></div><WorkflowIcon size={19}/></div>{typeForm.companyId?<div className="quality-ok"><CheckCircle2 size={17}/><span>نسخة شركة مستقلة · تعديلها ينشئ إصدارًا جديدًا لهذه الشركة فقط.</span></div>:<><div className="company-publish-grid">{companies.map(c=><label key={c.id} className={`company-publish-option ${publishSelection.includes(c.id)?'selected':''}`}><input type="checkbox" checked={publishSelection.includes(c.id)} onChange={e=>setPublishSelection(v=>e.target.checked?[...v,c.id]:v.filter(x=>x!==c.id))}/><span><strong>{c.display_name}</strong><small>{c.company_identifier}</small></span></label>)}</div><button className="btn primary" disabled={busy||!publishSelection.length} onClick={()=>void publishToCompanies()}><WorkflowIcon size={15}/>نسخ النسخة الحالية إلى الشركات المحددة</button></>}</section>}
-    {typeId&&currentStage&&<>
-      <section className="panel stage-focus-card"><div className="stage-focus-head"><div><span className="stage-index">المرحلة {currentStage.stageOrder}</span><input className="stage-name-input" value={currentStage.nameAr} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,nameAr:e.target.value}:x))}/><p>هذه هي الشاشة التي سيشاهدها المسؤول عند وصول المعاملة لهذه المرحلة.</p></div><div className="stage-tools"><button className="icon-btn" disabled={currentStage.stageOrder===1} onClick={()=>moveStage(currentStage.stageOrder-1,-1)}><ArrowUp size={15}/></button><button className="icon-btn" disabled={currentStage.stageOrder===stageOptions.length} onClick={()=>moveStage(currentStage.stageOrder-1,1)}><ArrowDown size={15}/></button><button className="btn danger" disabled={stages.length<=1} title={stages.length<=1?'يجب الإبقاء على مرحلة واحدة على الأقل':'حذف المرحلة الحالية'} onClick={()=>{if(stages.length<=1)return;const deleted=currentStage.id;const n=stages.filter(x=>x.id!==deleted).map((x,k)=>({...x,stageOrder:k+1}));setStages(n);setTransitions(v=>v.filter(t=>t.fromStageId!==deleted&&t.toStageId!==deleted));setActiveStageId(n[0]?.id||'')}}><Trash2 size={15}/>حذف المرحلة</button></div></div>
-        <div className="stage-config-grid"><label className="form-field"><span>المسؤول</span><select value={currentStage.responsibleType} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,responsibleType:e.target.value}:x))}>{Object.entries(responsibilityLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label><label className="form-field"><span>تحديد المسؤول</span><input value={currentStage.responsibleValue} disabled={!['role','user','position_holder','permission'].includes(currentStage.responsibleType)} placeholder={currentStage.responsibleType==='manager'?'يُستخرج تلقائيًا من الموظف':currentStage.responsibleType==='department_manager'?'يُستخرج من الوحدة التنظيمية':'المعرّف أو الرمز' } onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,responsibleValue:e.target.value}:x))}/></label><label className="form-field"><span>المدة <small>(اختياري)</small></span><div className="inline-unit"><input type="number" min="1" value={currentStage.durationMinutes} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,durationMinutes:e.target.value===''?'':Number(e.target.value)}:x))}/><span>دقيقة</span></div></label></div>
-        <label className="check-row"><input type="checkbox" checked={Boolean(currentStage.config?.employeeFeedback)} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,config:{...x.config,employeeFeedback:e.target.checked}}:x))}/><span>السماح بإضافة ملاحظات الموظف كإجراء فرعي</span></label>
-        <div className="stage-attachments-config"><label className="check-row"><input type="checkbox" checked={Boolean(currentStage.config?.allowAttachments)} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,config:{...x.config,allowAttachments:e.target.checked}}:x))}/><span>السماح بإرفاق ملفات في هذه المرحلة</span></label>{Boolean(currentStage.config?.allowAttachments)&&<label className="form-field"><span>عدد المرفقات الأقصى <small>(اختياري)</small></span><input type="number" min="1" value={currentStage.config?.maxAttachments??''} onChange={e=>setStages(v=>v.map(x=>x.id===currentStage.id?{...x,config:{...x.config,maxAttachments:e.target.value===''?null:Number(e.target.value)}}:x))}/></label>}</div>
-      </section>
-      <section className="panel workflow-subpanel"><div className="panel-head"><div><h3>البيانات المطلوبة</h3><p>ما يراه المستخدم في هذه المرحلة فقط.</p></div><button className="btn secondary" onClick={()=>addField(currentStage.id)}><Plus size={15}/>إضافة حقل</button></div>{fields.filter(f=>f.stageId===currentStage.id).length===0?<div className="empty-soft">لا توجد حقول في هذه المرحلة. أضف أول حقل.</div>:fields.filter(f=>f.stageId===currentStage.id).map(f=><div className="workflow-config-row" key={f.id}><input value={f.fieldKey} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,fieldKey:e.target.value}:x))} placeholder="field_key"/><input value={f.labelAr} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,labelAr:e.target.value}:x))} placeholder="اسم الحقل"/><select value={f.fieldType} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,fieldType:e.target.value}:x))}><option value="text">نص</option><option value="textarea">نص طويل</option><option value="number">رقم</option><option value="date">تاريخ</option><option value="datetime">تاريخ ووقت</option><option value="boolean">نعم/لا</option><option value="select">اختيار</option><option value="multiselect">اختيارات متعددة</option><option value="employee">موظف</option><option value="organization_unit">وحدة تنظيمية</option><option value="position">منصب</option><option value="user">مستخدم</option></select><label className="mini-check"><input type="checkbox" checked={f.required} onChange={e=>setFields(v=>v.map(x=>x.id===f.id?{...x,required:e.target.checked}:x))}/>مطلوب</label><button className="icon-btn" onClick={()=>setFields(v=>v.filter(x=>x.id!==f.id))}><Trash2 size={15}/></button></div>)}</section>
-      <section className="panel workflow-subpanel"><div className="panel-head"><div><h3>الأسئلة والقرارات</h3><p>الإجابة قد تحدد المسار التالي تلقائيًا.</p></div><button className="btn secondary" onClick={()=>addQuestion(currentStage.id)}><Plus size={15}/>إضافة سؤال</button></div>{questions.filter(q=>q.stageId===currentStage.id).length===0?<div className="empty-soft">لا توجد أسئلة. استخدمها عندما يكون قرار المرحلة مرتبطًا بإجابة.</div>:questions.filter(q=>q.stageId===currentStage.id).map(q=><div className="workflow-config-row question-row" key={q.id}><input value={q.questionKey} onChange={e=>setQuestions(v=>v.map(x=>x.id===q.id?{...x,questionKey:e.target.value}:x))}/><input value={q.questionAr} onChange={e=>setQuestions(v=>v.map(x=>x.id===q.id?{...x,questionAr:e.target.value}:x))}/><select value={q.questionType} onChange={e=>setQuestions(v=>v.map(x=>x.id===q.id?{...x,questionType:e.target.value}:x))}><option value="yes_no">نعم / لا</option><option value="text">نص</option><option value="select">اختيار</option><option value="notes">ملاحظات</option></select><label className="mini-check"><input type="checkbox" checked={q.required} onChange={e=>setQuestions(v=>v.map(x=>x.id===q.id?{...x,required:e.target.checked}:x))}/>مطلوب</label><button className="icon-btn" onClick={()=>setQuestions(v=>v.filter(x=>x.id!==q.id))}><Trash2 size={15}/></button></div>)}</section>
-      <section className="panel workflow-subpanel"><div className="panel-head"><div><h3>المسار</h3><p>المسار تلقائي افتراضيًا. أضف شرطًا فقط عندما تحتاج مسارًا مختلفًا حسب إجابة أو حقل.</p></div><button className="btn secondary" onClick={()=>addTransition(currentStage.id)}><GitBranch size={15}/>إضافة شرط</button></div>{advancedTransitions.length===0?<div className="auto-route-card"><div><CheckCircle2 size={18}/><strong>{currentStage.stageOrder<stageOptions.length?'سينتقل تلقائيًا للمرحلة التالية':'عند التمرير تكتمل المعاملة'}</strong></div><span>{currentStage.stageOrder<stageOptions.length?stageOptions.find(s=>s.stageOrder===currentStage.stageOrder+1)?.nameAr:'هذه آخر مرحلة في المسار'}</span></div>:advancedTransitions.map(t=><div className="transition-card" key={t.id}><div className="transition-main"><span className="transition-badge">{t.condition?'شرط':'تلقائي'}</span><select value={t.action} onChange={e=>setTransitions(v=>v.map(x=>x.id===t.id?{...x,action:e.target.value}:x))}><option value="next">تمرير</option><option value="complete">إكمال</option><option value="return">إرجاع</option><option value="reject">رفض</option><option value="cancel">إلغاء</option></select><select value={t.toStageId||''} disabled={t.action==='complete'||t.action==='reject'||t.action==='cancel'} onChange={e=>setTransitions(v=>v.map(x=>x.id===t.id?{...x,toStageId:e.target.value||null}:x))}><option value="">بدون وجهة</option>{stageOptions.map(s=><option key={s.id} value={s.id}>{s.stageOrder}. {s.nameAr}</option>)}</select><input value={t.labelAr} onChange={e=>setTransitions(v=>v.map(x=>x.id===t.id?{...x,labelAr:e.target.value}:x))} placeholder="اسم المسار"/><button className="icon-btn" onClick={()=>setTransitions(v=>v.filter(x=>x.id!==t.id))}><Trash2 size={15}/></button></div><div className="transition-condition transition-condition-builder"><div className="condition-heading"><GitBranch size={15}/><div><strong>{t.condition?'شرط المسار':'مسار تلقائي'}</strong><small>{t.condition?'حدد الحقل أو السؤال من نفس المرحلة أو أي مرحلة سابقة.':'بدون شرط، ينتقل المحرك تلقائيًا إلى الوجهة المحددة.'}</small></div>{t.condition?<button className="btn ghost" onClick={()=>clearCondition(t.id)}>إزالة الشرط</button>:<button className="btn secondary" onClick={()=>updateCondition(t.id,{source:conditionSources[0]?.key||'',operator:'equals',value:''})} disabled={!conditionSources.length}>إضافة شرط</button>}</div>{t.condition&&<><div className="condition-grid"><label className="form-field"><span>الحقل / السؤال</span><select value={t.condition.source||''} onChange={e=>{const next=e.target.value;const info=sourceInfo(next);updateCondition(t.id,{source:next,operator:conditionOperators(next)[0]?.value||'equals',value:info?.type==='yes_no'||info?.type==='boolean'?'':info?.options?.[0]?.value??info?.options?.[0]??''})}}><option value="">اختر مصدر الشرط</option>{conditionSources.filter(x=>x.stageOrder===0).length?<optgroup label="بيانات مقدم الطلب">{conditionSources.filter(x=>x.stageOrder===0).map(x=><option key={x.key} value={x.key}>{x.label} · {x.type}</option>)}</optgroup>:null}{stageOptions.map(s=>{const items=conditionSources.filter(x=>x.stageOrder===s.stageOrder);return items.length?<optgroup key={s.id} label={`المرحلة ${s.stageOrder} · ${s.nameAr}`}>{items.map(x=><option key={x.key} value={x.key}>{x.label} · {x.type}</option>)}</optgroup>:null})}</select></label><label className="form-field"><span>المقارنة</span><select value={t.condition.operator||'equals'} onChange={e=>updateCondition(t.id,{operator:e.target.value})}>{conditionOperators(t.condition.source||'').map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label><label className="form-field"><span>القيمة</span>{(()=>{const info=sourceInfo(t.condition.source||'');const isBool=info?.type==='yes_no'||info?.type==='boolean';const opts=info?.options||[];if(isBool)return <select value={String(t.condition.value??'')} onChange={e=>updateCondition(t.id,{value:e.target.value==='true'})}><option value="">اختر</option><option value="true">نعم</option><option value="false">لا</option></select>;if(opts.length)return <select value={String(t.condition.value??'')} onChange={e=>updateCondition(t.id,{value:e.target.value})}><option value="">اختر القيمة</option>{opts.map((o:any,i:number)=><option key={i} value={String(o?.value??o)}>{o?.label_ar??o?.label??o}</option>)}</select>;return <input value={t.condition.value??''} onChange={e=>updateCondition(t.id,{value:e.target.value})} placeholder="القيمة التي سيتم التحقق منها"/>})()}</label></div><div className="condition-preview"><span>إذا</span><strong>{sourceInfo(t.condition.source||'')?.label||'اختر الحقل أو السؤال'}</strong><span>{conditionOperators(t.condition.source||'').find(o=>o.value===t.condition.operator)?.label||'يساوي'}</span><strong>{String(t.condition.value??'')||'القيمة'}</strong><span>→</span><b>{t.toStageId?stageOptions.find(s=>s.id===t.toStageId)?.nameAr:'بدون وجهة'}</b></div></>}</div></div>)}</section>
-    </>}
-   </main>
-   {creationStep!=='stage'&&<aside className="workflow-quality panel"><div className="panel-head"><div><h3>مساعد الجودة</h3><p>يفحص التصميم قبل النشر.</p></div><ShieldCheck size={19}/></div><div className={`quality-summary ${errors.length?'has-errors':warnings.length?'has-warnings':'ready'}`}><strong>{errors.length?'يحتاج تعديل':warnings.length?'جاهز مع تنبيهات':'التصميم سليم مبدئيًا'}</strong><span>{errors.length?`${errors.length} أخطاء تمنع النشر`:warnings.length?`${warnings.length} تنبيهات فقط`:'لا توجد مشاكل مانعة'}</span></div>{validation.length===0?<div className="quality-ok"><CheckCircle2 size={17}/><span>ممتاز. أضف الحقول والمسارات ثم اختبر السيناريو كاملًا.</span></div>:<div className="quality-list">{validation.map((x:any,i)=><button key={i} className={`quality-item ${x.level}`} onClick={()=>{if(x.stageId)setActiveStageId(x.stageId)}}>{x.level==='error'?<XCircle size={15}/>:<AlertTriangle size={15}/>}<span><strong>{x.title}</strong><small>{x.detail}</small></span><ChevronLeft size={14}/></button>)}</div>}<div className="quality-tip"><strong>قاعدة آمنة</strong><span>المستخدم لا يرى شروط الـWorkflow أو الوجهات الداخلية؛ يرى فقط البيانات المطلوبة وزر «تمرير المعاملة».</span></div></aside>}
+  async function loadTemplates(){
+    setListLoading(true);setListError(false);
+    try{const r=await api<{items:Template[]}>('/api/workflows/admin/types');setTemplates(r.items||[]);}catch{setListError(true);}finally{setListLoading(false);}
+  }
+  useEffect(()=>{void loadTemplates();},[]);
+
+  function hydrate(t:any,w:any){
+    setType(t);setWorkflow(w);
+    const wd=w.workflow;
+    setNameAr(t.name_ar||'');setNameEn(t.name_en||'');setDescription(wd.description||t.description||'');setSubmitters(wd.allowed_submitters||['self']);
+    const ss=(w.stages||[]).map((s:any)=>({id:s.id,nameAr:s.name_ar,nameEn:s.name_en||'',stageOrder:Number(s.stage_order),responsibleType:s.responsible_type,responsibleValue:s.responsible_value||'',durationMinutes:s.duration_minutes===null?null:Number(s.duration_minutes),employeeFeedback:Boolean(s.config?.employeeFeedback)}));
+    const ff=(w.fields||[]).map((f:any)=>({id:f.id,stageId:f.stage_id||null,fieldKey:f.field_key,labelAr:f.label_ar,labelEn:f.label_en||'',fieldType:f.field_type,required:Boolean(f.required),options:Array.isArray(f.options)?f.options.map((v:any)=>String(v)):[],sortOrder:Number(f.sort_order||0),active:Boolean(f.active)}));
+    const rr=(w.transitions||[]).map((r:any)=>({id:r.id||newId(),fromStageId:r.from_stage_id,toStageId:r.to_stage_id||null,action:r.action,condition:r.condition?{fieldKey:r.condition.fieldKey,values:Array.isArray(r.condition.values)?r.condition.values.map((v:any)=>String(v)):[]}:null,sortOrder:Number(r.sort_order||0)}));
+    setStages(ss);setFields(ff);setRoutes(rr);setSelectedStage(ss[0]?.id||'');setValidation(null);
+  }
+  async function openType(typeId:string){
+    if(loadedTypeRef.current===typeId&&workflow)return;
+    loadedTypeRef.current=typeId;setLoading(true);setError('');
+    try{
+      let r=await api<any>(`/api/workflows/admin/types/${typeId}`);
+      if(!r.workflow||r.workflow.workflow.status!=='draft'){
+        const draft=await api<any>(`/api/workflows/admin/types/${typeId}/new-draft`,{method:'POST'});
+        r=await api<any>(`/api/workflows/admin/types/${typeId}?workflowId=${draft.id}`);
+      }
+      hydrate(r.type,r.workflow);setMode('builder');
+    }catch(e){setError(e instanceof Error?e.message:'تعذر فتح القالب.');}
+    finally{setLoading(false);}
+  }
+  useEffect(()=>{
+    if(params.typeId==='new'){setMode('create');setType(null);setWorkflow(null);loadedTypeRef.current='';return;}
+    if(params.typeId){setMode('builder');void openType(params.typeId);return;}
+    setMode('list');setType(null);setWorkflow(null);loadedTypeRef.current='';
+  },[params.typeId]);
+
+  function addStage(){
+    setStages(prev=>{
+      const next=[...prev,blankStage(prev.length+1)].map((s,i)=>({...s,stageOrder:i+1}));
+      const oldLast=prev[prev.length-1];const newStage=next[next.length-1];
+      if(oldLast){
+        setRoutes(current=>{
+          const oldRoutes=current.filter(r=>r.fromStageId===oldLast.id);
+          const defaultTerminal=oldRoutes.find(r=>!r.condition&&['complete','reject','cancel'].includes(r.action));
+          if(defaultTerminal)return current.map(r=>r.id===defaultTerminal.id?{...r,action:'next',toStageId:newStage.id}:r);
+          if(current.some(r=>r.fromStageId===oldLast.id&&r.action==='next'&&r.toStageId))return current;
+          return [...current,blankRoute(oldLast.id,'next',newStage.id,oldRoutes.length)];
+        });
+      }
+      setSelectedStage(newStage.id);return next;
+    });
+    setValidation(null);
+  }
+  function removeStage(stageId:string){
+    if(stages.length<=1)return;
+    setStages(prev=>prev.filter(s=>s.id!==stageId).map((s,i)=>({...s,stageOrder:i+1})));
+    setRoutes(prev=>prev.filter(r=>r.fromStageId!==stageId&&r.toStageId!==stageId));
+    setFields(prev=>prev.filter(f=>f.stageId!==stageId));
+    setSelectedStage(prev=>prev===stageId?stages.find(s=>s.id!==stageId)?.id||'':prev);
+    setValidation(null);
+  }
+  function moveStage(stageId:string,dir:-1|1){
+    setStages(prev=>{const idx=prev.findIndex(s=>s.id===stageId),ni=idx+dir;if(idx<0||ni<0||ni>=prev.length)return prev;const copy=[...prev];[copy[idx],copy[ni]]=[copy[ni],copy[idx]];return copy.map((s,i)=>({...s,stageOrder:i+1}));});
+    setValidation(null);
+  }
+  function addField(stageId:string|null){setFields(prev=>[...prev,blankField(stageId,prev.filter(f=>f.stageId===stageId).length)]);setValidation(null);}
+  function updateField(id:string,patch:Partial<Field>){setFields(prev=>prev.map(f=>f.id===id?{...f,...patch}:f));setValidation(null);}
+  function removeField(id:string){setFields(prev=>prev.filter(f=>f.id!==id));setRoutes(prev=>prev.map(r=>r.condition?.fieldKey&&fields.find(f=>f.id===id)?.fieldKey===r.condition.fieldKey?{...r,condition:null}:r));setValidation(null);}
+  function addRoute(stageId:string){
+    const stage=stages.find(s=>s.id===stageId);if(!stage)return;
+    const nextStage=stages.find(s=>s.stageOrder===stage.stageOrder+1);
+    const previousStage=stages.find(s=>s.stageOrder===stage.stageOrder-1);
+    const action:ActionType=nextStage?'next':previousStage?'complete':'complete';
+    const target=action==='next'?nextStage?.id:null;
+    setRoutes(prev=>[...prev,blankRoute(stageId,action,target,prev.filter(r=>r.fromStageId===stageId).length)]);setValidation(null);
+  }
+  function updateRoute(id:string,patch:Partial<Route>){setRoutes(prev=>prev.map(r=>r.id===id?{...r,...patch}:r));setValidation(null);}
+  function removeRoute(id:string){setRoutes(prev=>prev.filter(r=>r.id!==id));setValidation(null);}
+
+  const requestFields=useMemo(()=>ordered(fields.filter(f=>f.stageId===null)),[fields]);
+  const currentStage=stages.find(s=>s.id===selectedStage)||stages[0];
+  const currentFields=useMemo(()=>currentStage?ordered(fields.filter(f=>f.stageId===currentStage.id)):[],[fields,currentStage?.id]);
+  const sourceFields=useMemo(()=>{
+    if(!currentStage)return [];
+    return ordered(fields.filter(f=>{
+      if(f.stageId===null)return true;
+      const source=stages.find(s=>s.id===f.stageId);return Boolean(source&&source.stageOrder<=currentStage.stageOrder);
+    }));
+  },[fields,stages,currentStage?.id]);
+
+  function uniqueFieldKey(label:string,ignoreId?:string){
+    const base=slugKey(label,fields.length);let candidate=base;let n=2;
+    while(fields.some(f=>f.id!==ignoreId&&f.fieldKey===candidate)){candidate=`${base}_${n++}`;}
+    return candidate;
+  }
+  function onLabelChange(field:Field,value:string){
+    const patch:Partial<Field>={labelAr:value};
+    if(/^element_\d+$/.test(field.fieldKey)||/^field_\d+$/.test(field.fieldKey))patch.fieldKey=uniqueFieldKey(value,field.id);
+    updateField(field.id,patch);
+  }
+
+  function validateLocal(){
+    const errors:ValidationItem[]=[];const warnings:ValidationItem[]=[];const keys=new Set<string>();
+    if(!nameAr.trim())errors.push({message:'اسم المعاملة مطلوب.'});
+    if(!submitters.length)errors.push({message:'حدد من يمكنه تقديم المعاملة.'});
+    if(!stages.length)errors.push({message:'أضف مرحلة واحدة على الأقل.'});
+    stages.forEach((s,i)=>{if(s.stageOrder!==i+1)errors.push({message:'ترتيب المراحل غير متسلسل.',stageId:s.id});if(!s.nameAr.trim())errors.push({message:'اسم المرحلة مطلوب.',stageId:s.id});});
+    fields.forEach(f=>{
+      if(!keys.has(f.fieldKey))keys.add(f.fieldKey);else errors.push({message:'يوجد عنصر مكرر داخليًا.',stageId:f.stageId||undefined,fieldKey:f.fieldKey});
+      if(!f.labelAr.trim())errors.push({message:'اسم العنصر مطلوب.',stageId:f.stageId||undefined,fieldKey:f.fieldKey});
+      if(!/^[A-Za-z][A-Za-z0-9_]{1,80}$/.test(f.fieldKey))errors.push({message:'تعريف داخلي غير صالح لهذا العنصر.',stageId:f.stageId||undefined,fieldKey:f.fieldKey});
+      if(['select','multiselect'].includes(f.fieldType)&&!f.options.length)errors.push({message:'أضف قيم الاختيار لهذا العنصر.',stageId:f.stageId||undefined,fieldKey:f.fieldKey});
+    });
+    stages.forEach((s,i)=>{
+      const rs=routes.filter(r=>r.fromStageId===s.id);
+      if(!rs.length)errors.push({message:'حدد أثر تمرير للمرحلة.',stageId:s.id});
+      if(i<stages.length-1&&!rs.some(r=>r.action==='next'&&r.toStageId))errors.push({message:'حدد المرحلة التالية أو أثرًا نهائيًا.',stageId:s.id});
+      if(i===stages.length-1&&!rs.some(r=>['complete','reject','cancel'].includes(r.action)))errors.push({message:'حدد أثر إنهاء للمرحلة الأخيرة.',stageId:s.id});
+      rs.forEach(r=>{
+        if(['next','return'].includes(r.action)&&!r.toStageId)errors.push({message:r.action==='next'?'حدد المرحلة التالية.':'حدد مرحلة الرجوع.',stageId:s.id,transitionId:r.id});
+        if(r.toStageId===s.id)errors.push({message:'لا يمكن أن يعود المسار إلى المرحلة نفسها.',stageId:s.id,transitionId:r.id});
+        const targetOrder=r.toStageId?stages.find(x=>x.id===r.toStageId)?.stageOrder||0:0;
+        if(r.action==='next'&&targetOrder<=s.stageOrder)errors.push({message:'المسار يجب أن يتجه إلى مرحلة لاحقة.',stageId:s.id,transitionId:r.id});
+        if(r.action==='return'&&targetOrder>=s.stageOrder)errors.push({message:'الرجوع يجب أن يتجه إلى مرحلة سابقة.',stageId:s.id,transitionId:r.id});
+        if(s.stageOrder===stages.length&&r.action==='next')errors.push({message:'المرحلة الأخيرة لا تنتقل إلى مرحلة تالية.',stageId:s.id,transitionId:r.id});
+        if(r.condition){
+          if(!r.condition.fieldKey)errors.push({message:'حدد حقل الشرط.',stageId:s.id,transitionId:r.id});
+          if(!r.condition.values.length)errors.push({message:'حدد قيمة الشرط.',stageId:s.id,transitionId:r.id});
+          const source=fields.find(f=>f.fieldKey===r.condition?.fieldKey);
+          if(!source)errors.push({message:'حقل الشرط غير موجود.',stageId:s.id,transitionId:r.id});
+          else if(source.stageId){const sourceOrder=stages.find(x=>x.id===source.stageId)?.stageOrder||999;if(sourceOrder>s.stageOrder)errors.push({message:'لا يمكن أن يعتمد الشرط على مرحلة لاحقة.',stageId:s.id,transitionId:r.id});}
+          if(source&&['select','multiselect'].includes(source.fieldType)&&r.condition.values.some(v=>!source.options.includes(String(v))))errors.push({message:'إحدى قيم الشرط غير موجودة ضمن الخيارات.',stageId:s.id,transitionId:r.id});
+        }
+      });
+    });
+    const result={valid:errors.length===0,errors,warnings};setValidation(result);return result;
+  }
+  async function loadServerValidation(){
+    if(!workflow)return;try{const r=await api<any>(`/api/workflows/admin/workflows/${workflow.workflow.id}/validate`);setValidation(r);}catch{setValidation(validateLocal());}
+  }
+  function scrollToIssue(item:ValidationItem){if(item.stageId){setSelectedStage(item.stageId);requestAnimationFrame(()=>stageRefs.current[item.stageId!]?.scrollIntoView({behavior:'smooth',block:'center'}));}}
+  function buildPayload(){
+    return {
+      transactionTypeId:type.id,description:description.trim()||null,allowedSubmitters:submitters,
+      stages:stages.map((s,i)=>({id:s.id,nameAr:s.nameAr,nameEn:s.nameEn||null,stageOrder:i+1,responsibleType:s.responsibleType,responsibleValue:['employee_owner','direct_manager','department_manager','position_holder','company_admin'].includes(s.responsibleType)?null:(s.responsibleValue||null),durationMinutes:s.durationMinutes,config:{employeeFeedback:s.employeeFeedback},active:true})),
+      fields:fields.map((f,i)=>({id:f.id,stageId:f.stageId,fieldKey:f.fieldKey,labelAr:f.labelAr,labelEn:f.labelEn||null,fieldType:f.fieldType,required:f.required,options:f.options,config:{requestSection:f.stageId===null},sortOrder:i,active:true})),
+      transitions:routes.map((r,i)=>({id:r.id,fromStageId:r.fromStageId,toStageId:r.toStageId,action:r.action,labelAr:actionLabels[r.action],condition:r.condition,sortOrder:i,active:true})),
+    };
+  }
+  async function save():Promise<boolean>{
+    if(!workflow||!type)return false;
+    setError('');const local=validateLocal();if(!local.valid){scrollToIssue(local.errors[0]);return false;}
+    setSaving(true);
+    try{
+      await api(`/api/workflows/admin/workflows/${workflow.workflow.id}`,{method:'PUT',body:JSON.stringify(buildPayload())});
+      await api(`/api/workflows/admin/types/${type.id}`,{method:'PATCH',body:JSON.stringify({nameAr:nameAr.trim(),nameEn:nameEn.trim()||null,description:description.trim()||null})});
+      const r=await api<any>(`/api/workflows/admin/types/${type.id}?workflowId=${workflow.workflow.id}`);hydrate(r.type,r.workflow);
+      return true;
+    }catch(e){setError(e instanceof Error?e.message:'تعذر حفظ المسودة.');return false;}
+    finally{setSaving(false);}
+  }
+  async function approve(){
+    if(!workflow||approving)return;setError('');
+    const ok=await save();if(!ok)return;
+    setApproving(true);
+    try{await api(`/api/workflows/admin/workflows/${workflow.workflow.id}/approve`,{method:'POST'});await loadTemplates();const r=await api<any>(`/api/workflows/admin/types/${type.id}?workflowId=${workflow.workflow.id}`);hydrate(r.type,r.workflow);setWorkflow((w:any)=>w?{...w,workflow:{...w.workflow,status:'active'}}:w);}
+    catch(e){setError(e instanceof Error?e.message:'تعذر اعتماد النسخة.');}
+    finally{setApproving(false);}
+  }
+  const [newTypeName,setNewTypeName]=useState(''),[newTypeDescription,setNewTypeDescription]=useState(''),[newSubmitters,setNewSubmitters]=useState<string[]>(['self']);
+  function toggleNewSubmitter(k:string){setNewSubmitters(v=>v.includes(k)?v.filter(x=>x!==k):[...v,k]);}
+  async function submitCreate(){
+    if(newTypeName.trim().length<2||!newSubmitters.length)return;setError('');
+    try{const r=await api<any>('/api/workflows/admin/types',{method:'POST',body:JSON.stringify({nameAr:newTypeName.trim(),description:newTypeDescription.trim()||null,allowedSubmitters:newSubmitters})});setNewTypeName('');setNewTypeDescription('');setNewSubmitters(['self']);navigate(`/workflow-studio/${r.id}`);}
+    catch(e){setError(e instanceof Error?e.message:'تعذر إنشاء القالب.');}
+  }
+
+  if(mode==='list')return <div className="workflow-studio-page">
+    <div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>قوالب المعاملات</h1><p>أنشئ القالب هنا، اضبط المراحل، اختبره، ثم اعتمده.</p></div><button className="btn primary" onClick={()=>navigate('/workflow-studio/new')}><Plus size={16}/> قالب جديد</button></div>
+    {listLoading?<LoadingState/>:listError?<ErrorState/>:templates.length===0?<section className="studio-empty panel"><div className="studio-empty-icon"><WorkflowIcon size={25}/></div><h3>ابدأ أول قالب</h3><p>سيظهر كل قالب هنا مع حالته ونسخته.</p><button className="btn primary" onClick={()=>navigate('/workflow-studio/new')}><Plus size={15}/> إنشاء قالب</button></section>:
+      <section className="studio-template-board"><div className="studio-board-head"><div><span className="eyebrow">بيئة التصميم</span><h2>قوالب المعاملات</h2></div><span className="studio-count">{templates.length} قالب</span></div><div className="template-grid">{templates.map(t=><article className="template-card" key={t.id}><div className="template-card-top"><div className="template-symbol"><WorkflowIcon size={20}/></div><span className={`badge ${t.active_version?'success':'warning'}`}>{t.active_version?'معتمد':'مسودة'}</span></div><h3>{t.name_ar}</h3>{t.description&&<p>{t.description}</p>}<div className="template-stats"><div><strong>{t.stage_count??0}</strong><span>مراحل</span></div><div><strong>{t.requester_field_count??0}</strong><span>عناصر الطلب</span></div><div><strong>{t.latest_version??1}</strong><span>النسخة</span></div></div><div className="template-actions"><button className="btn secondary" onClick={()=>{loadedTypeRef.current='';navigate(`/workflow-studio/${t.id}`)}}>فتح الاستوديو</button><button className="btn primary" onClick={()=>navigate(`/workflow-studio/test/${t.id}`)}><Play size={14}/> اختبار</button></div></article>)}</div></section>}
+  </div>;
+
+  if(mode==='create')return <div className="workflow-studio-page">
+    <div className="page-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>قالب جديد</h1></div><Link className="btn secondary" to="/workflow-studio"><X size={15}/> إلغاء</Link></div>
+    <section className="create-template-card panel"><div className="create-template-intro"><div className="create-template-icon"><Layers3 size={23}/></div><div><h2>ابدأ من أساس المعاملة</h2><p>بعد الإنشاء تنتقل مباشرة إلى إعداد المرحلة الأولى.</p></div></div><div className="studio-form-grid"><label className="studio-field"><span>اسم المعاملة *</span><input autoFocus value={newTypeName} onChange={e=>setNewTypeName(e.target.value)} placeholder="مثال: طلب تغيير المسمى الوظيفي"/></label><label className="studio-field studio-wide"><span>الوصف <em>اختياري</em></span><textarea value={newTypeDescription} onChange={e=>setNewTypeDescription(e.target.value)} rows={3} placeholder="وصف مختصر لطبيعة المعاملة"/></label></div><div className="create-submitters"><div><strong>مَن يمكنه تقديم المعاملة؟</strong><span>يمكن تعديل ذلك لاحقًا.</span></div><div className="submitter-choice-grid compact"><Submitter checked={newSubmitters.includes('self')} label="مقدم الطلب" onClick={()=>toggleNewSubmitter('self')}/><Submitter checked={newSubmitters.includes('company_admin')} label="مدير الشركة" onClick={()=>toggleNewSubmitter('company_admin')}/><Submitter checked={newSubmitters.includes('permission:transaction.create')} label="حامل صلاحية الإنشاء" onClick={()=>toggleNewSubmitter('permission:transaction.create')}/></div></div>{error&&<div className="form-error workflow-inline-error">{error}</div>}<div className="create-page-actions"><Link className="btn secondary" to="/workflow-studio">إلغاء</Link><button className="btn primary" disabled={newTypeName.trim().length<2||!newSubmitters.length} onClick={submitCreate}><Check size={16}/> إنشاء والانتقال للمرحلة الأولى</button></div></section>
+  </div>;
+
+  if(loading||!workflow||!type||!currentStage)return <div className="workflow-studio-page"><LoadingState/></div>;
+
+  return <div className="workflow-studio-page">
+    <div className="page-header workflow-studio-header"><div><div className="eyebrow">استوديو سير العمل</div><h1>{nameAr}</h1><p>نسخة {workflow.workflow.version} · {workflow.workflow.status==='active'?'معتمدة':'قيد البناء'}</p></div><div className="header-actions"><Link className="btn secondary" to="/workflow-studio"><X size={15}/> القوالب</Link><button className="btn secondary" onClick={()=>navigate(`/workflow-studio/test/${type.id}`)}><Play size={15}/> اختبار</button><button className="btn primary" onClick={approve} disabled={saving||approving||workflow.workflow.status!=='draft'}><CheckCircle2 size={15}/>{approving?'اعتماد...':'اعتماد النسخة'}</button></div></div>
+    {error&&<div className="form-error workflow-inline-error">{error}</div>}
+
+    <section className="studio-flow-intro panel"><div className="flow-intro-main"><div className="flow-intro-icon"><WorkflowIcon size={22}/></div><div><span>ترتيب المعاملة</span><strong>بيانات الطلب أولًا، ثم مراحل المعالجة</strong><p>بيانات مقدم الطلب والطلب ليست مرحلة. تبدأ المراحل فقط بعد تقديم المعاملة.</p></div></div><div className="flow-intro-actions"><span className="badge info"><ShieldCheck size={13}/> قالب عام</span><span className="badge muted">النسخة {workflow.workflow.version}</span></div></section>
+
+    <section className="panel studio-request-panel"><div className="panel-head"><div><span className="eyebrow">الأساس</span><h3>مقدم الطلب وبيانات المعاملة</h3><p>هذه المنطقة تسبق جميع المراحل ولا تُحسب مرحلة.</p></div><button className="btn secondary" onClick={()=>addField(null)}><Plus size={15}/> إضافة عنصر</button></div><div className="requester-system-grid"><div><UserRound size={17}/><div><span>مقدم الطلب</span><strong>يُحدد عند تقديم المعاملة</strong></div></div><div><UserRound size={17}/><div><span>الموظف المرتبط</span><strong>اختياري · عنصر موظف، والافتراضي مقدم الطلب</strong></div></div><div><Layers3 size={17}/><div><span>بداية المسار</span><strong>بعد التقديم تبدأ المرحلة الأولى</strong></div></div></div><FieldEditor fields={requestFields} onUpdate={updateField} onLabelChange={onLabelChange} onRemove={removeField}/></section>
+
+    <div className="studio-layout">
+      <aside className="studio-stage-panel panel"><div className="panel-head"><div><span className="eyebrow">المعالجة</span><h3>مراحل المعاملة</h3><p>{stages.length} مراحل</p></div><button className="btn secondary icon-only" onClick={addStage} title="إضافة مرحلة"><Plus size={16}/></button></div><div className="stage-list">{stages.map(s=><button key={s.id} className={`stage-list-item ${selectedStage===s.id?'active':''}`} onClick={()=>setSelectedStage(s.id)}><span className="stage-list-number">{s.stageOrder}</span><div><strong>{s.nameAr}</strong><span>{respLabels[s.responsibleType]}</span></div><GripVertical size={15}/></button>)}</div><button className="stage-add-full" onClick={addStage}><Plus size={15}/> إضافة مرحلة</button></aside>
+
+      <main className="studio-editor-column" ref={el=>{if(el&&currentStage)stageRefs.current[currentStage.id]=el}}>
+        <section className="stage-editor-head panel"><div className="stage-head-main"><div className="stage-number-large">{currentStage.stageOrder}</div><div><span>المرحلة {currentStage.stageOrder}</span><h2>{currentStage.nameAr}</h2><p>{respLabels[currentStage.responsibleType]}</p></div></div><div className="stage-head-actions"><button className="icon-btn compact" onClick={()=>moveStage(currentStage.id,-1)} disabled={currentStage.stageOrder===1} title="أعلى"><ArrowUp size={15}/></button><button className="icon-btn compact" onClick={()=>moveStage(currentStage.id,1)} disabled={currentStage.stageOrder===stages.length} title="أسفل"><ArrowDown size={15}/></button><button className="icon-btn compact danger-icon" onClick={()=>removeStage(currentStage.id)} disabled={stages.length===1} title="حذف المرحلة"><Trash2 size={15}/></button></div></section>
+
+        <section className="panel stage-settings"><div className="panel-head"><div><h3>تعريف المرحلة</h3><span>من المسؤول؟ وما المدة؟</span></div></div><div className="studio-form-grid stage-settings-grid"><label className="studio-field"><span>اسم المرحلة *</span><input value={currentStage.nameAr} onChange={e=>setStages(v=>v.map(s=>s.id===currentStage.id?{...s,nameAr:e.target.value}:s))}/></label><label className="studio-field"><span>المسؤول *</span><select value={currentStage.responsibleType} onChange={e=>setStages(v=>v.map(s=>s.id===currentStage.id?{...s,responsibleType:e.target.value as RespType,responsibleValue:''}:s))}>{Object.entries(respLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>{!['employee_owner','direct_manager','department_manager','position_holder','company_admin'].includes(currentStage.responsibleType)&&<label className="studio-field"><span>{currentStage.responsibleType==='role'?'الدور':currentStage.responsibleType==='permission'?'الصلاحية':'المستخدم المحدد'}</span><input value={currentStage.responsibleValue} onChange={e=>setStages(v=>v.map(s=>s.id===currentStage.id?{...s,responsibleValue:e.target.value}:s))}/></label>}<label className="studio-field"><span>مدة المرحلة</span><div className="unit-input"><input type="number" min={1} value={currentStage.durationMinutes??''} onChange={e=>setStages(v=>v.map(s=>s.id===currentStage.id?{...s,durationMinutes:e.target.value?Number(e.target.value):null}:s))}/><em>دقيقة</em></div></label></div><label className="toggle-row"><input type="checkbox" checked={currentStage.employeeFeedback} onChange={e=>setStages(v=>v.map(s=>s.id===currentStage.id?{...s,employeeFeedback:e.target.checked}:s))}/><span><strong>طلب ملاحظات الموظف عند الحاجة</strong><small>اختياري داخل هذه المرحلة، وليس عنصرًا يظهر تلقائيًا.</small></span></label></section>
+
+        <section className="panel stage-elements" id={`stage-${currentStage.id}`}><div className="panel-head"><div><span className="eyebrow">المحتوى</span><h3>عناصر المرحلة</h3><p>كل ما يحتاجه مسؤول المرحلة يظهر هنا بترتيب واضح.</p></div><button className="btn secondary" onClick={()=>addField(currentStage.id)}><Plus size={15}/> إضافة عنصر</button></div><FieldEditor fields={currentFields} onUpdate={updateField} onLabelChange={onLabelChange} onRemove={removeField}/></section>
+
+        <section className="panel route-panel"><div className="panel-head"><div><span className="eyebrow">المسار</span><h3>ماذا يحدث عند تمرير المرحلة؟</h3><p>الشرط · القيم · الأثر</p></div><button className="btn secondary" onClick={()=>addRoute(currentStage.id)}><Plus size={15}/> إضافة مسار</button></div><div className="route-table-head"><span>الشرط</span><span>القيم</span><span>الأثر</span><span>الوجهة</span><span></span></div><div className="route-list">{ordered(routes.filter(r=>r.fromStageId===currentStage.id)).map(route=><RouteRow key={route.id} route={route} stage={currentStage} stages={stages} fields={sourceFields} onUpdate={updateRoute} onRemove={removeRoute}/>)}</div>{routes.filter(r=>r.fromStageId===currentStage.id).length===0&&<div className="route-empty">أضف مسارًا واحدًا على الأقل.</div>}</section>
+      </main>
+    </div>
+
+    <section className="panel submitters-panel"><div className="panel-head"><div><span className="eyebrow">بداية المعاملة</span><h3>من يمكنه تقديم المعاملة؟</h3></div></div><div className="submitter-choice-grid"><Submitter checked={submitters.includes('self')} label="مقدم الطلب" onClick={()=>setSubmitters(v=>v.includes('self')?v.filter(x=>x!=='self'):[...v,'self'])}/><Submitter checked={submitters.includes('company_admin')} label="مدير الشركة" onClick={()=>setSubmitters(v=>v.includes('company_admin')?v.filter(x=>x!=='company_admin'):[...v,'company_admin'])}/><Submitter checked={submitters.includes('permission:transaction.create')} label="حامل صلاحية الإنشاء" onClick={()=>setSubmitters(v=>v.includes('permission:transaction.create')?v.filter(x=>x!=='permission:transaction.create'):[...v,'permission:transaction.create'])}/></div></section>
+
+    <section className="panel validation-panel"><div className="panel-head"><div><span className="eyebrow">جودة النسخة</span><h3>التحقق قبل الاعتماد</h3><p>أي خطأ مانع يحدد لك مكانه مباشرة.</p></div><button className="btn secondary" onClick={loadServerValidation}><GitBranch size={15}/> فحص النسخة</button></div>{validation?<div className="validation-dashboard"><div className={`validation-summary ${validation.valid?'valid':'invalid'}`}>{validation.valid?<CheckCircle2 size={19}/>:<CircleAlert size={19}/>}<div><strong>{validation.valid?'النسخة جاهزة للاعتماد':'توجد نقاط تحتاج معالجة'}</strong><span>{validation.valid?`${validation.warnings.length} تنبيهات غير مانعة`: `${validation.errors.length} عناصر مانعة`}</span></div></div>{validation.errors.length>0&&<div className="validation-list">{validation.errors.map((item,i)=><button key={`${item.message}-${i}`} className="validation-item error" onClick={()=>scrollToIssue(item)}><CircleAlert size={15}/><span>{item.message}</span></button>)}</div>}{validation.warnings.length>0&&<div className="validation-list">{validation.warnings.map((item,i)=><div key={i} className="validation-item warning"><CircleAlert size={15}/><span>{item.message}</span></div>)}</div>}</div>:<div className="validation-idle"><CheckCircle2 size={17}/><span>فحص النسخة متاح قبل الاعتماد.</span></div>}</section>
+
+    <div className="studio-savebar"><div><strong>{workflow.workflow.status==='active'?'نسخة معتمدة':'مسودة'}</strong><span>النسخة {workflow.workflow.version}</span></div><div><button className="btn secondary" onClick={save} disabled={saving}>{saving?<Clock3 size={15}/>:<Save size={15}/>} حفظ</button><button className="btn primary" onClick={approve} disabled={saving||approving}>{approving?<Clock3 size={15}/>:<CheckCircle2 size={15}/>} اعتماد النسخة</button></div></div>
+  </div>;
+}
+
+function Submitter({checked,label,onClick}:{checked:boolean;label:string;onClick:()=>void}){return <button type="button" className={`studio-choice ${checked?'checked':''}`} onClick={onClick}><span className="choice-check">{checked&&<Check size={13}/>}</span><span>{label}</span></button>}
+
+function FieldEditor({fields,onUpdate,onLabelChange,onRemove}:{fields:Field[];onUpdate:(id:string,p:Partial<Field>)=>void;onLabelChange:(field:Field,value:string)=>void;onRemove:(id:string)=>void}){
+  const sorted=ordered(fields);
+  if(!sorted.length)return <div className="field-editor-empty"><div className="field-empty-icon"><Layers3 size={18}/></div><span>أضف أول عنصر لهذا القسم.</span></div>;
+  return <div className="field-list">{sorted.map((f,index)=><div className="field-config-card" key={f.id}><div className="field-index">{index+1}</div><div className="field-config-main"><label><span>اسم العنصر *</span><input value={f.labelAr} onChange={e=>onLabelChange(f,e.target.value)} placeholder="مثال: سبب الطلب"/></label><label><span>نوع الإجابة</span><select value={f.fieldType} onChange={e=>onUpdate(f.id,{fieldType:e.target.value as FieldType,options:[]})}>{Object.entries(fieldLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>{['select','multiselect'].includes(f.fieldType)&&<label className="field-config-wide"><span>القيم</span><input value={f.options.join('، ')} onChange={e=>onUpdate(f.id,{options:parseOptions(e.target.value)})} placeholder="قيمة، قيمة، قيمة"/></label>}{f.fieldType==='employee'&&f.stageId===null&&<span className="field-special-tag">سيُستخدم كموظف مرتبط (اختياري افتراضيًا)</span>}</div><div className="field-config-side"><label className="field-required-toggle"><input type="checkbox" checked={f.required} onChange={e=>onUpdate(f.id,{required:e.target.checked})}/><span>مطلوب</span></label><button className="icon-btn compact danger-icon" onClick={()=>onRemove(f.id)} title="حذف العنصر"><Trash2 size={15}/></button></div></div>)}</div>
+}
+
+function RouteRow({route,stage,stages,fields,onUpdate,onRemove}:{route:Route;stage:Stage;stages:Stage[];fields:Field[];onUpdate:(id:string,p:Partial<Route>)=>void;onRemove:(id:string)=>void}){
+  const conditional=Boolean(route.condition);
+  const source=fields.find(f=>f.fieldKey===route.condition?.fieldKey);
+  const targets=route.action==='return'?stages.filter(s=>s.stageOrder<stage.stageOrder):stages.filter(s=>s.stageOrder>stage.stageOrder);
+  const defaultValue=source?.fieldType==='boolean'?(route.condition?.values?.[0]||'نعم'):(route.condition?.values?.[0]||'');
+  function changeAction(action:ActionType){
+    const to=action==='next'?stages.find(s=>s.stageOrder===stage.stageOrder+1)?.id||null:action==='return'?stages.find(s=>s.stageOrder===stage.stageOrder-1)?.id||null:null;
+    onUpdate(route.id,{action,toStageId:to});
+  }
+  function toggleCondition(){onUpdate(route.id,{condition:conditional?null:{fieldKey:fields[0]?.fieldKey||'',values:[source?.fieldType==='boolean'?'نعم':source?.options?.[0]||'']}})}
+  return <div className="route-row">
+    <div className="route-condition-cell"><button type="button" className={`condition-toggle ${conditional?'on':''}`} onClick={toggleCondition}>{conditional?'مشروط':'افتراضي'}</button>{conditional&&<select value={route.condition?.fieldKey||''} onChange={e=>{const f=fields.find(x=>x.fieldKey===e.target.value);onUpdate(route.id,{condition:{fieldKey:e.target.value,values:[f?.fieldType==='boolean'?'نعم':f?.options?.[0]||'']}})}}><option value="">حقل الشرط</option>{fields.map(f=><option key={f.id} value={f.fieldKey}>{f.labelAr}</option>)}</select>}</div>
+    <div className="route-value-cell">{conditional?(source?.fieldType==='boolean'?<select value={defaultValue} onChange={e=>onUpdate(route.id,{condition:{fieldKey:route.condition?.fieldKey||'',values:[e.target.value]}})}><option value="نعم">نعم</option><option value="لا">لا</option></select>:source&&['select','multiselect'].includes(source.fieldType)?<select value={defaultValue} onChange={e=>onUpdate(route.id,{condition:{fieldKey:route.condition?.fieldKey||'',values:[e.target.value]}})}><option value="">القيمة</option>{source.options.map(o=><option key={o} value={o}>{o}</option>)}</select>:<input value={defaultValue} onChange={e=>onUpdate(route.id,{condition:{fieldKey:route.condition?.fieldKey||'',values:[e.target.value]}})} placeholder="القيمة"/>):<span className="route-default-label">يمر وفق المسار الافتراضي</span>}</div>
+    <div className="route-effect-cell"><select value={route.action} onChange={e=>changeAction(e.target.value as ActionType)}>{Object.entries(actionLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
+    <div className="route-target-cell">{['next','return'].includes(route.action)?<select value={route.toStageId||''} onChange={e=>onUpdate(route.id,{toStageId:e.target.value||null})}><option value="">الوجهة</option>{targets.map(s=><option key={s.id} value={s.id}>{s.stageOrder}. {s.nameAr}</option>)}</select>:<span className="terminal-route">نهاية المعاملة</span>}</div>
+    <button className="icon-btn compact danger-icon route-remove" onClick={()=>onRemove(route.id)} title="حذف المسار"><Trash2 size={14}/></button>
   </div>
- </div>;
 }

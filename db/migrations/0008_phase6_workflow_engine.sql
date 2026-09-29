@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS transaction_types (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT
 );
-
 CREATE INDEX IF NOT EXISTS idx_transaction_types_company_status ON transaction_types(company_id,status);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_types_scope_name ON transaction_types(COALESCE(company_id,'__GLOBAL__'),name_ar);
 
@@ -27,7 +26,6 @@ CREATE TABLE IF NOT EXISTS transaction_type_companies (
   FOREIGN KEY (transaction_type_id) REFERENCES transaction_types(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT
 );
-
 CREATE INDEX IF NOT EXISTS idx_transaction_type_companies_company ON transaction_type_companies(company_id,active);
 
 CREATE TABLE IF NOT EXISTS workflow_definitions (
@@ -43,7 +41,6 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (transaction_type_id) REFERENCES transaction_types(id) ON DELETE CASCADE
 );
-
 CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_active_type ON workflow_definitions(transaction_type_id) WHERE status='active';
 CREATE INDEX IF NOT EXISTS idx_workflow_type_status ON workflow_definitions(transaction_type_id,status);
 
@@ -267,5 +264,4 @@ INSERT OR IGNORE INTO permissions(id,resource,action,name_ar,name_en,description
 INSERT OR IGNORE INTO role_permissions(role_id,permission_id,scope)
 SELECT r.id,p.id,'company'
 FROM roles r CROSS JOIN permissions p
-WHERE r.code='company_admin' AND r.system_role=1
-  AND p.resource IN ('workflow','transaction');
+WHERE r.code='company_admin' AND r.system_role=1 AND p.resource IN ('workflow','transaction');
