@@ -13,9 +13,8 @@ export function TransactionDetail(){
  const current=useMemo(()=>d?.workflow?.stages?.find((s:any)=>s.id===d?.transaction?.current_stage_id),[d]);
  const stageFields=useMemo(()=>d?.workflow?.fields?.filter((f:any)=>f.stage_id===current?.id)||[],[d,current]);
  const stageQuestions=useMemo(()=>d?.workflow?.questions?.filter((q:any)=>q.stage_id===current?.id)||[],[d,current]);
- const visibleTransitions=useMemo(()=>{const all=(d?.workflow?.transitions||[]).filter((x:any)=>x.from_stage_id===current?.id&&x.active).sort((a:any,b:any)=>a.sort_order-b.sort_order);return all.filter((x:any)=>transitionMatches(x,answers));},[d,current,answers]);
- const primary=visibleTransitions.find((x:any)=>x.action==='next')||visibleTransitions.find((x:any)=>x.action==='complete');
  const canAct=d?.transaction?.status==='قيد الإجراء';
+ const primary=canAct?{action:'next',to_stage_id:null}:null;
  async function pass(){if(!primary)return;setBusy(true);setError('');try{await api(`/api/workflows/transactions/${id}/action`,{method:'POST',body:JSON.stringify({action:primary.action,toStageId:primary.to_stage_id||null,answers,reason:reason||null})});setReason('');await load();}catch(e){setError(e instanceof Error&&e.message==='TRANSACTION-004'?'أكمل الحقول والأسئلة المطلوبة أولًا.':e instanceof Error?e.message:'تعذر تمرير المعاملة.')}finally{setBusy(false)}}
  async function feedback(){if(!reason.trim())return;try{await api(`/api/workflows/transactions/${id}/feedback`,{method:'POST',body:JSON.stringify({feedback:reason})});setReason('');await load();}catch(e){setError(e instanceof Error?e.message:'تعذر حفظ الملاحظة.')}}
  if(error&&!d)return <div className="panel-empty">{error}</div>;if(!d)return <div className="panel-empty">جاري تحميل المعاملة...</div>;
