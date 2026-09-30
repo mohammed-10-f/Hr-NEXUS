@@ -346,7 +346,7 @@ export function WorkflowAdmin() {
         <div className="wf-crumb"><button onClick={() => nav('/workflow-studio')}>استوديو سير العمل</button><ChevronLeft size={14} /><span>تصميم القالب</span></div>
         <div className="wf-hero-title-row"><span className="wf-hero-symbol"><WorkflowIcon size={28} /></span><div><div className="wf-kicker">WORKFLOW STUDIO</div><h1>{name || type.name_ar}</h1><p>{description || 'صمّم المعاملة مرة واحدة، ودع المحرك يدير البيانات والمراحل والمسارات.'}</p></div></div>
       </div>
-      <div className="wf-hero-actions"><span className={`wf-status ${workflow.status === 'active' ? 'active' : 'draft'}`}><span />{workflow.status === 'active' ? 'معتمد' : 'مسودة'}</span><Link className="wf-ghost" to={`/workflow-studio/preview/${type.id}`}><Eye size={16} />المعاينة</Link><Link className="wf-ghost" to={`/workflow-studio/test/${type.id}`}><CheckCircle2 size={16} />اختبار A–Z</Link></div>
+      <div className="wf-hero-actions"><span className={`wf-status ${workflow.status === 'active' ? 'active' : 'draft'}`}><span />{workflow.status === 'active' ? 'معتمد' : 'مسودة'}</span><Link className="wf-ghost" to={`/workflow-studio/preview/${type.id}`}><Eye size={16} />المعاينة</Link><Link className="wf-ghost" to={`/workflow-studio/test/${type.id}?workflowId=${encodeURIComponent(workflow.id)}`}><CheckCircle2 size={16} />اختبار A–Z</Link></div>
     </section>
 
     {error && <div className="wf-alert-v2 danger"><CircleAlert size={19} /><div><strong>لم يتم حفظ التغيير</strong><span>{error}</span></div><button onClick={() => setError('')}><X size={16} /></button></div>}

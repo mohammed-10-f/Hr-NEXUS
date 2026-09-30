@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CheckCircle2, CircleAlert, Eye, Play, RotateCcw, ShieldCheck, UserRound, UsersRound, Workflow as WorkflowIcon } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { resolveTransition, getStageDelegation } from '../../shared/workflowEngine';
 
@@ -13,14 +13,16 @@ const sampleValue=(key:string)=>({employee_number:'EMP-TEST-001',full_name:'بي
 
 export function WorkflowTestEnvironment(){
  const {typeId}=useParams<{typeId?:string}>();
+ const [searchParams]=useSearchParams();
+ const workflowIdParam=searchParams.get('workflowId')||'';
  const [templates,setTemplates]=useState<any[]>([]),[data,setData]=useState<any>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [values,setValues]=useState<Record<string,any>>({}),[stageId,setStageId]=useState(''),[history,setHistory]=useState<any[]>([]),[done,setDone]=useState<string|null>(null),[fieldErrors,setFieldErrors]=useState<Record<string,string>>({});
  const [targetEmployee,setTargetEmployee]=useState('');
  const [delegationPending,setDelegationPending]=useState<any>(null);
  const [delegatedStages,setDelegatedStages]=useState<Set<string>>(new Set());
  useEffect(()=>{api<any>('/api/workflows/test/templates').then(r=>setTemplates(r.items||[])).catch(e=>setError(e.message||'تعذر التحميل.'));},[]);
- useEffect(()=>{if(typeId)load(typeId);},[typeId]);
- async function load(id:string){setBusy(true);setError('');try{const r=await api<any>(`/api/workflows/test/templates/${id}`);setData(r);setStageId(r.workflow.stages[0]?.id||'');setValues({});setHistory([]);setDone(null);setFieldErrors({});setTargetEmployee('');setDelegationPending(null);setDelegatedStages(new Set());}catch(e:any){setError(e.message||'تعذر فتح الاختبار.');}finally{setBusy(false);}}
+ useEffect(()=>{if(typeId)load(typeId,workflowIdParam);},[typeId,workflowIdParam]);
+ async function load(id:string, workflowId=''){setBusy(true);setError('');try{const qs=workflowId?`?workflowId=${encodeURIComponent(workflowId)}`:'';const r=await api<any>(`/api/workflows/test/templates/${id}${qs}`);setData(r);setStageId(r.workflow.stages[0]?.id||'');setValues({});setHistory([]);setDone(null);setFieldErrors({});setTargetEmployee('');setDelegationPending(null);setDelegatedStages(new Set());}catch(e:any){setError(e.message||'تعذر فتح الاختبار.');}finally{setBusy(false);}}
  const w=data?.workflow; const stages=w?.stages||[]; const fields=w?.fields||[]; const current=stages.find((s:any)=>s.id===stageId); const currentFields=useMemo(()=>fields.filter((f:any)=>f.stage_id===stageId).sort((a:any,b:any)=>a.sort_order-b.sort_order),[fields,stageId]); const requestFields=useMemo(()=>fields.filter((f:any)=>!f.stage_id).sort((a:any,b:any)=>a.sort_order-b.sort_order),[fields]); const requesterSystem=(data?.systemFields||[]).filter((x:any)=>x.scope==='requester').sort((a:any,b:any)=>a.sort_order-b.sort_order); const targetSystem=(data?.systemFields||[]).filter((x:any)=>x.scope==='target').sort((a:any,b:any)=>a.sort_order-b.sort_order);
  function control(f:any){
   const v=values[f.field_key]??'';
@@ -63,7 +65,7 @@ export function WorkflowTestEnvironment(){
  }
  function reset(){setValues({});setHistory([]);setDone(null);setStageId(stages[0]?.id||'');setFieldErrors({});setError('');setTargetEmployee('');setDelegationPending(null);setDelegatedStages(new Set());}
 
- if(!typeId)return <div className="premium-studio"><div className="studio-flow-intro panel"><div className="flow-intro-main"><span className="flow-intro-icon"><WorkflowIcon size={20}/></span><div><span>استوديو سير العمل</span><strong>بيئة الاختبار A–Z</strong><p>محاكاة معزولة لسلوك القالب دون كتابة معاملات أو موظفين أو مستخدمين في D1.</p></div></div></div><div className="test-template-board panel"><div className="panel-head"><div><h3>القوالب القابلة للاختبار</h3><p>هذه القائمة من القوالب الحقيقية الموجودة في الاستوديو.</p></div></div><div className="test-template-list">{templates.map(t=><Link key={t.id} className="test-template-card" to={`/workflow-studio/test/${t.id}`}><span className="test-template-icon"><Play size={15}/></span><div><strong>{t.name_ar}</strong><small>{t.workflow_id?'مسودة جاهزة للاختبار':'لا توجد مسودة'}</small></div><ArrowLeft size={14}/></Link>)}</div></div></div>;
+ if(!typeId)return <div className="premium-studio"><div className="studio-flow-intro panel"><div className="flow-intro-main"><span className="flow-intro-icon"><WorkflowIcon size={20}/></span><div><span>استوديو سير العمل</span><strong>بيئة الاختبار A–Z</strong><p>محاكاة معزولة لسلوك القالب دون كتابة معاملات أو موظفين أو مستخدمين في D1.</p></div></div></div><div className="test-template-board panel"><div className="panel-head"><div><h3>القوالب القابلة للاختبار</h3><p>هذه القائمة من القوالب الحقيقية الموجودة في الاستوديو.</p></div></div><div className="test-template-list">{templates.map(t=>{const href=t.workflow_id?`/workflow-studio/test/${t.id}?workflowId=${encodeURIComponent(t.workflow_id)}`:`/workflow-studio/test/${t.id}`;return <Link key={t.id} className="test-template-card" to={href}><span className="test-template-icon"><Play size={15}/></span><div><strong>{t.name_ar}</strong><small>{t.workflow_id?'مسودة جاهزة للاختبار':'لا توجد مسودة'}</small></div><ArrowLeft size={14}/></Link>})}</div></div></div>;
  if(busy&&!data)return <div className="premium-studio"><div className="test-state panel">جارٍ تجهيز بيئة الاختبار...</div></div>;
  if(!data)return <div className="premium-studio"><div className="test-state panel">{error||'تعذر تحميل الاختبار.'}</div></div>;
  return <div className="workflow-test premium-studio wow-studio"><section className="wf-hero compact"><div className="wf-hero-copy"><div className="wf-crumb"><Link to="/workflow-studio">استوديو سير العمل</Link><ArrowLeft size={13}/><span>بيئة الاختبار A–Z</span></div><div className="wf-hero-title-row"><span className="wf-hero-symbol"><Play size={27}/></span><div><div className="wf-kicker">ISOLATED TEST ENVIRONMENT</div><h1>{data.type.name_ar}</h1><p>محاكاة فعلية لسلوك القالب من البداية إلى النهاية دون إنشاء مستخدمين أو موظفين أو معاملات حقيقية في D1.</p></div></div></div><div className="wf-hero-actions"><span className="wf-status active"><span/>محاكاة معزولة</span><Link className="wf-ghost" to={`/workflow-studio/${data.type.id}`}><ArrowLeft size={15}/>المصمم</Link><button className="wf-ghost" onClick={reset}><RotateCcw size={15}/>إعادة الاختبار</button></div></section>

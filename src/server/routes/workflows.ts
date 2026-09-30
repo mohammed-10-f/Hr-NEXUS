@@ -520,10 +520,50 @@ app.get('/test/templates', async c=>{
   return c.json({items:rows.results});
 });
 app.get('/test/templates/:id', async c=>{
-  const type=await getType(c,c.req.param('id'));
+  const id=c.req.param('id');
+  const requestedWorkflowId=c.req.query('workflowId')||'';
+  let type=await getType(c,id);
+  let workflowId=requestedWorkflowId||'';
+
+  // The test UI historically passed the transaction_type id. Newer links may
+  // also pass the exact draft workflow id. Accept both so a test request can
+  // never fail merely because the UI used the workflow identifier.
+  if(!type){
+    const wf=await c.env.DB.prepare(`
+      SELECT wd.*,tt.id type_id,tt.name_ar type_name_ar,tt.description type_description,tt.allowed_submitters_json type_allowed_submitters,tt.status type_status
+      FROM workflow_definitions wd
+      JOIN transaction_types tt ON tt.id=wd.transaction_type_id
+      WHERE wd.id=? AND tt.company_id IS NULL
+      LIMIT 1
+    `).bind(id).first<any>();
+    if(wf){
+      type={
+        id:wf.type_id,
+        company_id:null,
+        name_ar:wf.type_name_ar,
+        description:wf.type_description,
+        allowed_submitters_json:wf.type_allowed_submitters,
+        status:wf.type_status
+      };
+      workflowId=workflowId||wf.id;
+    }
+  }
+
   if(!type)return errorResponse(c,'WORKFLOW-003',404);
-  const workflowId=(await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='draft' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>())?.id;
+
+  if(workflowId){
+    const owned=await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE id=? AND transaction_type_id=? LIMIT 1`).bind(workflowId,type.id).first<any>();
+    if(!owned)workflowId='';
+  }
+
+  if(!workflowId){
+    workflowId=(await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='draft' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>())?.id||'';
+  }
+  if(!workflowId){
+    workflowId=(await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='active' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>())?.id||'';
+  }
   if(!workflowId)return errorResponse(c,'WORKFLOW-003',404);
+
   const workflow=await loadWorkflow(c,workflowId);
   if(!workflow)return errorResponse(c,'WORKFLOW-003',404);
   const validation=validateModel({allowedSubmitters:workflow.workflow.allowed_submitters,stages:workflow.stages,fields:workflow.fields,transitions:workflow.transitions});
