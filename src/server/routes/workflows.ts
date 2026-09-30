@@ -34,12 +34,15 @@ const stageSchema = z.object({
   nameAr: z.string().trim().min(1).max(180),
   responsibleType: z.enum(responsibilityTypes),
   responsibleValue: z.string().trim().max(180).nullable(),
-  durationMinutes: z.number().int().min(1).max(525600).nullable()
+  durationMinutes: z.number().int().min(1).max(525600).nullable(),
+  config: z.object({
+    delegate: z.object({ enabled: z.boolean(), employeeFieldId: z.string().uuid().nullable() }).optional()
+  }).optional()
 });
 const conditionSchema = z.object({
   fieldId: z.string().uuid(),
-  operator: z.enum(['equals','not_equals','contains','is_true','is_false','in']),
-  values: z.array(z.string()).min(1).max(20)
+  operator: z.enum(['equals','not_equals','contains','is_true','is_false','in','is_empty','is_not_empty']),
+  values: z.array(z.string()).max(20)
 });
 const transitionSchema = z.object({
   id: z.string().uuid().optional(),
@@ -168,7 +171,7 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
   if (!data.allowedSubmitters?.length) out.errors.push({code:'SUBMITTERS',message:'حدد من يستطيع تقديم المعاملة.'});
   if (!stages.length) out.errors.push({code:'NO_STAGES',message:'أضف مرحلة واحدة على الأقل.'});
   const stageIds=new Set<string>();
-  stages.forEach((s,i)=>{
+  stages.forEach((s:any)=>{
     const id=s.id;
     if(!id || stageIds.has(id)) out.errors.push({code:'STAGE_ID',message:'يوجد تكرار غير صالح في مراحل المعاملة.',stageId:id});
     stageIds.add(id);
@@ -191,35 +194,43 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     if((f.required===true || Number(f.required)===1) && (f.displayOnly===true || f.config?.displayOnly===true)) out.errors.push({code:'READONLY_REQUIRED',message:'العنصر للعرض فقط ولا يمكن أن يكون مطلوبًا.',fieldId:id});
     if(['select','multiselect'].includes(f.fieldType??f.field_type) && !(f.options??[]).length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
   });
-  const stageIndex=new Map(stages.map((s:any,i)=>[s.id,i]));
+  const stageIndex=new Map(stages.map((s:any,i:number)=>[s.id,i]));
+  for(const s of stages){
+    const config=s.config??safeJson(s.config_json,{});
+    const delegate=config?.delegate;
+    if(delegate?.enabled){
+      const field=fieldById.get(delegate.employeeFieldId);
+      const currentIndex=stageIndex.get(s.id)??-1;
+      const fieldIndex=field?.stageId?stageIndex.get(field.stageId)??-1:-1;
+      if(!field || (field.fieldType??field.field_type)!=='employee') out.errors.push({code:'DELEGATE_FIELD',message:'تم تفعيل التمرير لموظف آخر دون اختيار عنصر «اختيار موظف».',stageId:s.id});
+      else if(field.config?.displayOnly===true) out.errors.push({code:'DELEGATE_READONLY',message:'عنصر الموظف المفوّض يجب أن يكون قابلًا للاختيار وليس للعرض فقط.',stageId:s.id,fieldId:field.id});
+      else if(Number(field.required)!==1 && field.required!==true) out.errors.push({code:'DELEGATE_REQUIRED',message:'عنصر الموظف المفوّض يجب أن يكون مطلوبًا حتى يضمن المحرك وجود موظف قبل التمرير.',stageId:s.id,fieldId:field.id});
+      else if(fieldIndex>currentIndex) out.errors.push({code:'DELEGATE_FUTURE',message:'عنصر الموظف المفوّض يجب أن يكون متاحًا قبل أو داخل هذه المرحلة.',stageId:s.id,fieldId:field.id});
+    }
+  }
   data.transitions.forEach((t:any)=>{
-    if(!stageIds.has(t.fromStageId??t.from_stage_id)) out.errors.push({code:'FROM_STAGE',message:'المسار مرتبط بمرحلة غير موجودة.',transitionId:t.id});
-    if(t.toStageId && !stageIds.has(t.toStageId)) out.errors.push({code:'TO_STAGE',message:'وجهة المسار غير موجودة.',transitionId:t.id});
+    const from=t.fromStageId??t.from_stage_id;
+    const to=t.toStageId??t.to_stage_id??null;
+    if(!stageIds.has(from)) out.errors.push({code:'FROM_STAGE',message:'المسار مرتبط بمرحلة غير موجودة.',transitionId:t.id});
+    if(to && !stageIds.has(to)) out.errors.push({code:'TO_STAGE',message:'وجهة المسار غير موجودة.',transitionId:t.id});
     const action=t.action;
-    if(['next','return'].includes(action) && !t.toStageId) out.errors.push({code:'TARGET',message:'حدد المرحلة المستهدفة.',transitionId:t.id});
-    if(action==='next' && t.toStageId && (stageIndex.get(t.toStageId)??-1) <= (stageIndex.get(t.fromStageId)??-1))
-      out.errors.push({code:'FORWARD',message:'الانتقال يجب أن يتجه إلى مرحلة لاحقة.',transitionId:t.id});
-    if(action==='return' && t.toStageId && (stageIndex.get(t.toStageId)??999) >= (stageIndex.get(t.fromStageId)??-1))
-      out.errors.push({code:'RETURN_DIRECTION',message:'الإرجاع يجب أن يتجه إلى مرحلة سابقة.',transitionId:t.id});
+    if(action==='next' && !to) out.errors.push({code:'TARGET',message:'حدد المرحلة التالية للمسار.',transitionId:t.id});
+    if(action==='return' && !to) out.errors.push({code:'TARGET',message:'حدد المرحلة التي ستعود إليها المعاملة.',transitionId:t.id});
+    if(action==='next' && to && (stageIndex.get(to)??-1) <= (stageIndex.get(from)??-1)) out.errors.push({code:'FORWARD',message:'تمرير المعاملة يجب أن يتجه إلى مرحلة لاحقة.',transitionId:t.id});
+    if(action==='return' && to && (stageIndex.get(to)??999) >= (stageIndex.get(from)??-1)) out.errors.push({code:'RETURN_DIRECTION',message:'الإرجاع يجب أن يتجه إلى مرحلة سابقة.',transitionId:t.id});
     if(t.condition){
       if(!fieldById.has(t.condition.fieldId)) out.errors.push({code:'CONDITION_SOURCE',message:'مصدر الشرط غير موجود.',transitionId:t.id});
       const source=fieldById.get(t.condition.fieldId);
       if(source){
         const sid=source.stageId??source.stage_id??null;
-        if(sid && (stageIndex.get(sid)??0)>(stageIndex.get(t.fromStageId)??0))
-          out.errors.push({code:'CONDITION_FUTURE',message:'لا يمكن أن يعتمد الشرط على عنصر من مرحلة لم تُنفذ بعد.',transitionId:t.id});
+        if(sid && (stageIndex.get(sid)??0)>(stageIndex.get(from)??0)) out.errors.push({code:'CONDITION_FUTURE',message:'لا يمكن أن يعتمد الشرط على عنصر من مرحلة لم تُنفذ بعد.',transitionId:t.id});
       }
+      if(['is_true','is_false','is_empty','is_not_empty'].includes(t.condition.operator) && (t.condition.values||[]).length) out.warnings.push({code:'CONDITION_VALUE_IGNORED',message:'هذا النوع من الشروط لا يحتاج قيمة؛ سيعتمد القرار على حالة الحقل فقط.',transitionId:t.id});
+      if(!['is_true','is_false','is_empty','is_not_empty'].includes(t.condition.operator) && !(t.condition.values||[]).length) out.errors.push({code:'CONDITION_VALUE',message:'حدد القيمة التي سيقارن بها الشرط.',transitionId:t.id});
     }
   });
-  stages.forEach((s:any,i:number)=>{
-    if(i===stages.length-1) return;
-    const outgoing=data.transitions.filter((t:any)=>t.fromStageId===s.id && t.active!==false && t.action!=='return' && t.action!=='reject' && t.action!=='cancel');
-    const conditional=outgoing.filter((t:any)=>t.condition);
-    if(conditional.length && !outgoing.some((t:any)=>!t.condition))
-      out.errors.push({code:'DEFAULT_ROUTE',message:'المسارات المشروطة تحتاج مسارًا افتراضيًا.',stageId:s.id});
-  });
   if(out.errors.length) out.valid=false;
-  else out.warnings.push({code:'DEFAULT_FLOW',message:'المراحل المتتالية تستخدم الانتقال الافتراضي تلقائيًا عند عدم وجود شرط.'});
+  else out.warnings.push({code:'DEFAULT_FLOW',message:'بدون شرط مطابق، ينتقل المحرك تلقائيًا للمرحلة التالية، وفي آخر مرحلة يكتمل الطلب.'});
   return out;
 }
 
@@ -375,7 +386,7 @@ app.put('/admin/workflows/:id', async c=>{
         INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active)
         VALUES(?,?,?,?,?,?,?,?,?,1)
         ON CONFLICT(id) DO UPDATE SET name_ar=excluded.name_ar,name_en=excluded.name_en,stage_order=excluded.stage_order,responsible_type=excluded.responsible_type,responsible_value=excluded.responsible_value,duration_minutes=excluded.duration_minutes,active=1,updated_at=CURRENT_TIMESTAMP
-      `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify({})));
+      `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify(s.config??{})));
     }
     for(const f of normalized.fields){
       const config={displayOnly:Boolean(f.displayOnly)};
