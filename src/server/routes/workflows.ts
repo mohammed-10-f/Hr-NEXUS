@@ -113,7 +113,7 @@ function workflowDbError(c:any,error:unknown){
   let code:'WORKFLOW-005'|'WORKFLOW-009'='WORKFLOW-005';
   if(/no such table:\s*workflow_(system_fields|request_settings)/i.test(raw)){
     code='WORKFLOW-009';
-    message='قاعدة بيانات Phase 6 لا تحتوي جداول بيانات النظام المطلوبة. طبّق Migration 0011 ثم أعد المحاولة.';
+    message='قاعدة بيانات Phase 6 غير متزامنة مع نسخة التطبيق الحالية. طبّق آخر Migration الخاصة بـPhase 6 ثم أعد المحاولة.';
   } else if(/UNIQUE constraint failed/i.test(raw)){
     message='يوجد تعارض في أحد عناصر القالب. راجع أسماء العناصر أو ترتيبها ثم أعد الحفظ.';
   } else if(/FOREIGN KEY constraint failed/i.test(raw)){
@@ -297,8 +297,10 @@ app.post('/admin/types', async c=>{
       c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,0,0)`).bind(crypto.randomUUID(),workflowId)
     ]);
   }catch(e){return workflowDbError(c,e);}
-  await audit(c,'workflow_template_created','workflow',workflowId,{transactionTypeId:typeId});
-  return c.json({ok:true,id:typeId,workflowId},201);
+  let auditRecorded=true;
+  try { await audit(c,'workflow_template_created','workflow',workflowId,{transactionTypeId:typeId}); }
+  catch (auditError) { auditRecorded=false; console.error('HR_NEXUS_WORKFLOW_AUDIT_FAILED',{path:c.req.path,workflowId,error:String(auditError)}); }
+  return c.json({ok:true,id:typeId,workflowId,auditRecorded},201);
 });
 
 
