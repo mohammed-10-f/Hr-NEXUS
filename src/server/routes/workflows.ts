@@ -9,37 +9,9 @@ const app = new Hono<Env>();
 app.use('/admin/*', requireAuthentication, requirePasswordChanged, requireSuperAdmin);
 app.use('/test/*', requireAuthentication, requirePasswordChanged, requireSuperAdmin);
 
-const fieldTypes = ['text','textarea','number','date','datetime','boolean','select','multiselect'] as const;
+const fieldTypes = ['text','textarea','number','date','datetime','boolean','select','multiselect','employee','organization_unit','position','user'] as const;
 const responsibilityTypes = ['direct_manager','position_holder','department_manager','role','permission','company_admin','employee_owner'] as const;
 const actions = ['next','return','reject','cancel','complete'] as const;
-
-const systemFieldCatalog = [
-  {key:'employee_number',label:'الرقم الوظيفي',type:'text',group:'البيانات الأساسية'},
-  {key:'full_name',label:'الاسم الكامل',type:'text',group:'البيانات الأساسية'},
-  {key:'nationality',label:'الجنسية',type:'text',group:'البيانات الأساسية'},
-  {key:'personal_phone',label:'الجوال الشخصي',type:'text',group:'بيانات الاتصال'},
-  {key:'personal_email',label:'البريد الشخصي',type:'text',group:'بيانات الاتصال'},
-  {key:'short_address',label:'العنوان المختصر',type:'text',group:'بيانات الاتصال'},
-  {key:'job_title',label:'المسمى الوظيفي',type:'text',group:'الوظيفة والتنظيم'},
-  {key:'organization_unit',label:'الوحدة التنظيمية',type:'text',group:'الوظيفة والتنظيم'},
-  {key:'position',label:'المنصب',type:'text',group:'الوظيفة والتنظيم'},
-  {key:'manager',label:'المدير المباشر',type:'text',group:'الوظيفة والتنظيم'},
-  {key:'work_location',label:'موقع العمل',type:'text',group:'الوظيفة والتنظيم'},
-  {key:'actual_start_date',label:'تاريخ المباشرة الفعلي',type:'date',group:'التوظيف والعقد'},
-  {key:'hire_date',label:'تاريخ التعيين',type:'date',group:'التوظيف والعقد'},
-  {key:'employment_type',label:'نوع التوظيف',type:'text',group:'التوظيف والعقد'},
-  {key:'contract_type',label:'نوع العقد',type:'text',group:'التوظيف والعقد'},
-  {key:'contract_start_date',label:'بداية العقد',type:'date',group:'التوظيف والعقد'},
-  {key:'contract_end_date',label:'نهاية العقد',type:'date',group:'التوظيف والعقد'},
-  {key:'probation_end_date',label:'نهاية فترة التجربة',type:'date',group:'التوظيف والعقد'},
-  {key:'basic_salary',label:'الراتب الأساسي',type:'number',group:'الراتب والمزايا',sensitive:true},
-  {key:'housing_allowance',label:'بدل السكن',type:'number',group:'الراتب والمزايا',sensitive:true},
-  {key:'transport_allowance',label:'بدل النقل',type:'number',group:'الراتب والمزايا',sensitive:true},
-  {key:'other_allowances',label:'البدلات الأخرى',type:'number',group:'الراتب والمزايا',sensitive:true},
-  {key:'gosi_number',label:'رقم التأمينات',type:'text',group:'البيانات النظامية',sensitive:true},
-  {key:'insurance_provider',label:'مزود التأمين',type:'text',group:'البيانات النظامية',sensitive:true}
-] as const;
-const systemFieldSources = new Set(systemFieldCatalog.map(x=>x.key));
 
 const typeSchema = z.object({
   nameAr: z.string().trim().min(1).max(180),
@@ -55,20 +27,13 @@ const fieldSchema = z.object({
   required: z.boolean(),
   displayOnly: z.boolean(),
   options: z.array(z.string().trim().min(1).max(160)).max(50),
-  config: z.object({
-    displayOnly:z.boolean().optional(),
-    systemSource:z.string().trim().max(120).optional(),
-    owner:z.enum(['requester','subject']).optional(),
-    sensitive:z.boolean().optional(),
-    group:z.string().trim().max(120).optional()
-  }).optional(),
   sortOrder: z.number().int().min(0).max(10000)
 });
 const stageSchema = z.object({
   id: z.string().uuid().optional(),
   nameAr: z.string().trim().min(1).max(180),
-  responsibleType: z.preprocess(v=>v===''?null:v,z.enum(responsibilityTypes).nullable()),
-  responsibleValue: z.preprocess(v=>v===''?null:v,z.string().trim().max(180).nullable()),
+  responsibleType: z.enum(responsibilityTypes),
+  responsibleValue: z.string().trim().max(180).nullable(),
   durationMinutes: z.number().int().min(1).max(525600).nullable()
 });
 const conditionSchema = z.object({
@@ -86,6 +51,7 @@ const transitionSchema = z.object({
   sortOrder: z.number().int().min(0).max(10000),
   active: z.boolean()
 });
+const systemFieldSchema = z.object({ sourceKey: z.string().trim().min(1).max(120), scope: z.enum(['requester','target']), labelAr: z.string().trim().min(1).max(180), sortOrder: z.number().int().min(0).max(1000) });
 const workflowSchema = z.object({
   transactionTypeId: z.string().uuid(),
   nameAr: z.string().trim().min(1).max(180).optional(),
@@ -94,23 +60,77 @@ const workflowSchema = z.object({
   stages: z.array(stageSchema).min(1).max(100),
   fields: z.array(fieldSchema).max(1000),
   transitions: z.array(transitionSchema).max(1000),
-  subjectMode: z.enum(['requester','different_employee']).optional(),
+  systemFields: z.array(systemFieldSchema).max(200),
+  targetEmployeeEnabled: z.boolean(),
+  targetEmployeeRequired: z.boolean()
 });
+const systemFieldKeys = new Set(['employee_number','full_name','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','residency_classification']);
 
 const safeJson = (value: any, fallback: any) => {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
 };
-
-function schemaIssueDetails(error:any){
-  return {issues:(error?.issues||[]).slice(0,12).map((issue:any)=>({path:Array.isArray(issue.path)?issue.path.join('.'):'',message:String(issue.message||'بيانات غير صحيحة.')}))};
-}
 const actorId = (c: any) => c.get('session')?.platformUserId ?? null;
+
+async function ensurePhase6AuxTables(c:any){
+  /* Remote D1s may have the original Phase 6 migrations applied without the
+     newer system-data tables. Keep this guard additive and Phase-6-only so a
+     normal Draft save cannot fail just because the optional catalog extension
+     is one migration behind. */
+  await c.env.DB.batch([
+    c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS workflow_system_fields (
+      id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('requester','target')),
+      source_key TEXT NOT NULL, label_ar TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+      UNIQUE(workflow_id,scope,source_key)
+    )`),
+    c.env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_workflow_system_fields_workflow_scope ON workflow_system_fields(workflow_id,scope,sort_order)`),
+    c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS workflow_request_settings (
+      id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL UNIQUE,
+      target_employee_enabled INTEGER NOT NULL DEFAULT 0 CHECK (target_employee_enabled IN (0,1)),
+      target_employee_required INTEGER NOT NULL DEFAULT 0 CHECK (target_employee_required IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
+    )`),
+    c.env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_workflow_request_settings_workflow ON workflow_request_settings(workflow_id)`)
+  ]);
+}
+
+async function tableExists(c:any, table:string){
+  const row=await c.env.DB.prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=? LIMIT 1`).bind(table).first<any>();
+  return Boolean(row?.ok);
+}
+
+function workflowDbError(c:any,error:unknown){
+  const referenceId=crypto.randomUUID();
+  const raw=String(error||'');
+  let message='تعذر حفظ التغيير في قالب سير العمل.';
+  let code:'WORKFLOW-005'|'WORKFLOW-009'='WORKFLOW-005';
+  if(/no such table:\s*workflow_(system_fields|request_settings)/i.test(raw)){
+    code='WORKFLOW-009';
+    message='قاعدة بيانات Phase 6 لا تحتوي جداول بيانات النظام المطلوبة. طبّق Migration 0011 ثم أعد المحاولة.';
+  } else if(/UNIQUE constraint failed/i.test(raw)){
+    message='يوجد تعارض في أحد عناصر القالب. راجع أسماء العناصر أو ترتيبها ثم أعد الحفظ.';
+  } else if(/FOREIGN KEY constraint failed/i.test(raw)){
+    message='يوجد ارتباط غير صالح بين مرحلة أو عنصر أو مسار. افتح فحص القالب لإظهار الموضع المتأثر.';
+  } else if(/CHECK constraint failed/i.test(raw)){
+    message='إحدى قيم إعدادات سير العمل غير مسموحة. راجع مسؤول المرحلة أو نوع الإجراء أو نوع العنصر.';
+  }
+  console.error('HR_NEXUS_WORKFLOW_DB', {referenceId,code,path:c.req.path});
+  return c.json({error:code,referenceId,message},500);
+}
 
 function validationResult() {
   return { valid: true, errors: [] as any[], warnings: [] as any[] };
 }
 
 async function loadWorkflow(c: any, workflowId: string) {
+  await ensurePhase6AuxTables(c);
   const workflow = await c.env.DB.prepare(`
     SELECT wd.*, tt.name_ar name_ar, tt.name_en name_en, tt.status type_status
     FROM workflow_definitions wd
@@ -118,25 +138,25 @@ async function loadWorkflow(c: any, workflowId: string) {
     WHERE wd.id=?
   `).bind(workflowId).first<any>();
   if (!workflow) return null;
-  const [stages, fields, transitions, settingsRow] = await Promise.all([
+  const [stages, fields, transitions, systemFields, requestSettings] = await Promise.all([
     c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(workflowId).all<any>(),
     c.env.DB.prepare(`SELECT * FROM workflow_fields WHERE workflow_id=? AND active=1 ORDER BY CASE WHEN stage_id IS NULL THEN 0 ELSE 1 END,stage_id,sort_order,id`).bind(workflowId).all<any>(),
     c.env.DB.prepare(`SELECT * FROM workflow_transitions WHERE workflow_id=? AND active=1 ORDER BY from_stage_id,sort_order,id`).bind(workflowId).all<any>(),
-    c.env.DB.prepare(`SELECT * FROM workflow_settings WHERE workflow_id=?`).bind(workflowId).first<any>()
+    c.env.DB.prepare(`SELECT * FROM workflow_system_fields WHERE workflow_id=? AND active=1 ORDER BY scope,sort_order,id`).bind(workflowId).all<any>(),
+    c.env.DB.prepare(`SELECT * FROM workflow_request_settings WHERE workflow_id=? LIMIT 1`).bind(workflowId).first<any>()
   ]);
   return {
     workflow: {...workflow, allowed_submitters:safeJson(workflow.allowed_submitters_json,[])},
     stages: stages.results.map((s:any)=>({...s, config:safeJson(s.config_json,{})})),
     fields: fields.results.map((f:any)=>({...f, options:safeJson(f.options_json,[]), config:safeJson(f.config_json,{})})),
     transitions: transitions.results.map((t:any)=>({...t, condition:safeJson(t.condition_json,null)})),
-    settings: settingsRow ? {subject_mode: settingsRow.subject_mode||'requester'} : {subject_mode:'requester'}
+    systemFields: systemFields.results,
+    requestSettings: {
+      targetEmployeeEnabled: Boolean(requestSettings?.target_employee_enabled) || systemFields.results.some((x:any)=>x.scope==='target'),
+      targetEmployeeRequired: Boolean(requestSettings?.target_employee_required)
+    }
   };
 }
-
-function errorResponseBody(code: any, zodError?:any){
-  return {error:code,referenceId:crypto.randomUUID(),message:ERROR_MESSAGES[code]||'بيانات غير صحيحة.', ...(zodError?schemaIssueDetails(zodError):{})};
-}
-const ERROR_MESSAGES:any={'WORKFLOW-001':'بيانات سير العمل غير مكتملة أو غير صحيحة.','WORKFLOW-005':'تعذر حفظ سير العمل. استخدم رقم المرجع عند التواصل مع الدعم.'};
 
 async function getType(c:any,id:string) {
   return c.env.DB.prepare(`SELECT * FROM transaction_types WHERE id=? AND company_id IS NULL`).bind(id).first<any>();
@@ -169,7 +189,6 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     const sid=f.stageId??f.stage_id??null;
     if(sid && !stageIds.has(sid)) out.errors.push({code:'FIELD_STAGE',message:'العنصر مرتبط بمرحلة غير موجودة.',fieldId:id});
     if((f.required===true || Number(f.required)===1) && (f.displayOnly===true || f.config?.displayOnly===true)) out.errors.push({code:'READONLY_REQUIRED',message:'العنصر للعرض فقط ولا يمكن أن يكون مطلوبًا.',fieldId:id});
-    if(f.config?.systemSource){ const source=String(f.config.systemSource); const key=source.split('.').slice(1).join('.'); if(!/^((requester)|(subject))\.[a-z0-9_]+$/.test(source) || !systemFieldSources.has(key)) out.errors.push({code:'SYSTEM_SOURCE',message:'بيانات النظام المحددة غير متاحة في نموذج الموظف.',fieldId:id,stageId:sid}); if(sid) out.errors.push({code:'SYSTEM_STAGE',message:'بيانات النظام يجب أن تبقى في أساس المعاملة وليس داخل مرحلة.',fieldId:id,stageId:sid}); }
     if(['select','multiselect'].includes(f.fieldType??f.field_type) && !(f.options??[]).length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
   });
   const stageIndex=new Map(stages.map((s:any,i)=>[s.id,i]));
@@ -209,13 +228,46 @@ function normalizePayload(data:any) {
   const stageMap=new Map<string,string>();
   data.stages.forEach((s:any,i:number)=>{ if(s.id) stageMap.set(s.id,stageIds[i]); });
   const stages=data.stages.map((s:any,i:number)=>({...s,id:stageIds[i],stageOrder:i+1}));
-  const fields=data.fields.map((f:any,i:number)=>({...f,id:f.id??crypto.randomUUID(),stageId:f.stageId?stageMap.get(f.stageId)??f.stageId:null,sortOrder:i,config:f.config||{}}));
+  const fields=data.fields.map((f:any,i:number)=>({...f,id:f.id??crypto.randomUUID(),stageId:f.stageId?stageMap.get(f.stageId)??f.stageId:null,sortOrder:i}));
   const transitions=data.transitions.map((t:any,i:number)=>({...t,id:t.id??crypto.randomUUID(),fromStageId:stageMap.get(t.fromStageId)??t.fromStageId,toStageId:t.toStageId?stageMap.get(t.toStageId)??t.toStageId:null,sortOrder:i}));
   return {stages,fields,transitions};
 }
 
-app.get('/admin/system-fields', async c=>{
-  return c.json({items:systemFieldCatalog.map(x=>({...x}))});
+
+app.get('/admin/catalog', async c=>{
+  const [roles,permissions]=await Promise.all([
+    c.env.DB.prepare(`SELECT code,MIN(name_ar) name_ar FROM roles WHERE status='active' AND code IS NOT NULL GROUP BY code ORDER BY name_ar`).all<any>(),
+    c.env.DB.prepare(`SELECT id,name_ar FROM permissions ORDER BY resource,action`).all<any>()
+  ]);
+  const systemFields=[
+    ['employee_number','الرقم الوظيفي','identity','text',false,'رقم الموظف المعتمد في ملف الموظف.',null],
+    ['full_name','اسم الموظف الكامل','identity','text',false,'الاسم الكامل من سجل الموظف.',null],
+    ['national_id','رقم الهوية / الإقامة','identity','text',true,'بيانات الهوية من ملف الموظف.','employee.view_identity'],
+    ['nationality','الجنسية','identity','text',false,'الجنسية المسجلة في ملف الموظف.',null],
+    ['gender','الجنس','identity','text',false,'الجنس المسجل في ملف الموظف.',null],
+    ['date_of_birth','تاريخ الميلاد','identity','date',false,'تاريخ الميلاد من ملف الموظف.',null],
+    ['personal_phone','الهاتف الشخصي','identity','text',true,'رقم الهاتف الشخصي.','employee.view_sensitive_data'],
+    ['personal_email','البريد الشخصي','identity','text',true,'البريد الشخصي.','employee.view_sensitive_data'],
+    ['short_address','العنوان المختصر','identity','text',true,'العنوان المختصر.','employee.view_sensitive_data'],
+    ['job_title','المسمى الوظيفي','employment','text',false,'المسمى الوظيفي الحالي.',null],
+    ['actual_start_date','تاريخ المباشرة الفعلية','employment','date',false,'تاريخ المباشرة الفعلية.',null],
+    ['join_date','تاريخ الالتحاق','employment','date',false,'تاريخ الالتحاق بالشركة.',null],
+    ['work_location','موقع العمل','employment','text',false,'موقع العمل المسجل.',null],
+    ['employment_type','نوع التوظيف','employment','text',false,'نوع التوظيف.',null],
+    ['contract_type','نوع العقد','employment','text',false,'نوع العقد.',null],
+    ['contract_start_date','بداية العقد','employment','date',false,'تاريخ بداية العقد.',null],
+    ['contract_end_date','نهاية العقد','employment','date',false,'تاريخ نهاية العقد.',null],
+    ['organization_unit','الوحدة التنظيمية','organization','text',false,'الوحدة التنظيمية من Phase 4.',null],
+    ['position','المنصب / الشاغر الوظيفي','organization','text',false,'المنصب المرتبط من Phase 4.',null],
+    ['direct_manager','المدير المباشر','organization','text',false,'المدير المباشر من ملف الموظف.',null],
+    ['basic_salary','الراتب الأساسي','salary','number',true,'آخر راتب أساسي فعّال من سجل الرواتب.','employee.view_salary'],
+    ['housing_allowance','بدل السكن','salary','number',true,'آخر بدل سكن فعّال.','employee.view_salary'],
+    ['transport_allowance','بدل النقل','salary','number',true,'آخر بدل نقل فعّال.','employee.view_salary'],
+    ['other_allowances','بدلات أخرى','salary','number',true,'إجمالي البدلات الأخرى في سجل الراتب.','employee.view_salary'],
+    ['gosi_number','رقم التأمينات','statutory','text',true,'رقم التأمينات المسجل.','employee.view_gosi'],
+    ['residency_classification','تصنيف الإقامة','statutory','text',true,'تصنيف الإقامة المسجل.','employee.view_identity']
+  ].map(([sourceKey,labelAr,group,type,sensitive,description,permission])=>({sourceKey,labelAr,group,type,sensitive,description,permission}));
+  return c.json({systemFields,roles:roles.results.map((r:any)=>({code:r.code,nameAr:r.name_ar})),permissions:permissions.results});
 });
 
 app.get('/admin/types', async c=>{
@@ -230,8 +282,9 @@ app.get('/admin/types', async c=>{
 });
 
 app.post('/admin/types', async c=>{
+  await ensurePhase6AuxTables(c);
   const parsed=typeSchema.safeParse(await c.req.json().catch(()=>null));
-  if(!parsed.success){const ref=crypto.randomUUID();console.error('HR_NEXUS_ERROR',{referenceId:ref,code:'WORKFLOW-001',path:c.req.path,details:parsed.error.issues});return c.json({...errorResponseBody('WORKFLOW-001',parsed.error)},400);}
+  if(!parsed.success){ const referenceId=crypto.randomUUID(); console.error('HR_NEXUS_WORKFLOW_INPUT', {referenceId,path:c.req.path,issues:parsed.error.issues}); return c.json({error:'WORKFLOW-001',referenceId,message:'يوجد حقل أو إعداد غير مكتمل في النموذج. افتح المشكلة المحددة داخل المصمم ثم صححها قبل الحفظ.',details:parsed.error.issues.map(i=>({path:i.path,message:i.message}))},400); }
   const d=parsed.data;
   const duplicate=await c.env.DB.prepare(`SELECT id FROM transaction_types WHERE company_id IS NULL AND TRIM(name_ar)=TRIM(?)`).bind(d.nameAr).first();
   if(duplicate)return errorResponse(c,'WORKFLOW-007',409);
@@ -240,12 +293,32 @@ app.post('/admin/types', async c=>{
     await c.env.DB.batch([
       c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,? ,?,'inactive',?,?)`).bind(typeId,null,d.nameAr,d.description??null,JSON.stringify(d.allowedSubmitters),actor,actor),
       c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`).bind(workflowId,typeId,1,d.description??null,JSON.stringify(d.allowedSubmitters),actor,actor),
-      c.env.DB.prepare(`INSERT INTO workflow_settings(workflow_id,subject_mode,updated_by) VALUES(?,?,?)`).bind(workflowId,'requester',actor),
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(stageId,workflowId,'المرحلة 1',1,'company_admin')
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(stageId,workflowId,'المرحلة 1',1,'company_admin'),
+      c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,0,0)`).bind(crypto.randomUUID(),workflowId)
     ]);
-  }catch(e){return errorResponse(c,'WORKFLOW-005',500,e);}
+  }catch(e){return workflowDbError(c,e);}
   await audit(c,'workflow_template_created','workflow',workflowId,{transactionTypeId:typeId});
   return c.json({ok:true,id:typeId,workflowId},201);
+});
+
+
+app.post('/admin/types/:id/new-draft', async c=>{
+  await ensurePhase6AuxTables(c);
+  const type=await getType(c,c.req.param('id'));
+  if(!type)return errorResponse(c,'WORKFLOW-003',404);
+  const existing=await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='draft' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>();
+  if(existing)return c.json({ok:true,id:existing.id});
+  const current=await c.env.DB.prepare(`SELECT MAX(version) version FROM workflow_definitions WHERE transaction_type_id=?`).bind(type.id).first<any>();
+  const version=Number(current?.version||0)+1;
+  const workflowId=crypto.randomUUID(),stageId=crypto.randomUUID(),actor=actorId(c);
+  try{
+    await c.env.DB.batch([
+      c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`).bind(workflowId,type.id,version,type.description||null,type.allowed_submitters_json||'[]',actor,actor),
+      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(stageId,workflowId,'المرحلة 1',1,'company_admin'),
+      c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,0,0)`).bind(crypto.randomUUID(),workflowId)
+    ]);
+  }catch(e){return workflowDbError(c,e);}
+  return c.json({ok:true,id:workflowId},201);
 });
 
 app.get('/admin/types/:id', async c=>{
@@ -264,9 +337,10 @@ app.get('/admin/workflows/:id', async c=>{
 });
 
 app.put('/admin/workflows/:id', async c=>{
+  await ensurePhase6AuxTables(c);
   const workflowId=c.req.param('id');
   const parsed=workflowSchema.safeParse(await c.req.json().catch(()=>null));
-  if(!parsed.success){ const ref=crypto.randomUUID(); console.error('HR_NEXUS_ERROR',{referenceId:ref,code:'WORKFLOW-001',path:c.req.path,details:parsed.error.issues}); return c.json({error:'WORKFLOW-001',referenceId:ref,message:'بيانات سير العمل غير مكتملة أو غير صحيحة. راجع الحقول المحددة أدناه.',issues:schemaIssueDetails(parsed.error).issues},400); }
+  if(!parsed.success){ const referenceId=crypto.randomUUID(); console.error('HR_NEXUS_WORKFLOW_INPUT', {referenceId,path:c.req.path,issues:parsed.error.issues}); return c.json({error:'WORKFLOW-001',referenceId,message:'بيانات القالب الأساسية غير مكتملة. راجع الاسم والمراحل والعناصر ثم حاول مرة أخرى.',details:parsed.error.issues.map(i=>({path:i.path,message:i.message}))},400); }
   const existing=await c.env.DB.prepare(`
     SELECT wd.*,tt.company_id type_company_id FROM workflow_definitions wd
     JOIN transaction_types tt ON tt.id=wd.transaction_type_id
@@ -274,9 +348,11 @@ app.put('/admin/workflows/:id', async c=>{
   `).bind(workflowId).first<any>();
   if(!existing)return errorResponse(c,'WORKFLOW-003',404);
   if(existing.status!=='draft')return errorResponse(c,'WORKFLOW-004',409);
-  if(existing.transaction_type_id!==parsed.data.transactionTypeId)return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'القالب المفتوح لا يطابق نوع المعاملة المحدد.',issues:[{path:'transactionTypeId',message:'أعد فتح القالب ثم حاول الحفظ مرة أخرى.'}]},400);
+  if(existing.transaction_type_id!==parsed.data.transactionTypeId){ const referenceId=crypto.randomUUID(); return c.json({error:'WORKFLOW-001',referenceId,message:'القالب المحدد لا يطابق نسخة سير العمل التي تحاول حفظها.',details:[{path:['transactionTypeId'],message:'أعد فتح القالب من قائمة قوالب المعاملات ثم حاول الحفظ مرة أخرى.'}]},400); }
 
   const normalized=normalizePayload(parsed.data);
+  const invalidSystemFields=parsed.data.systemFields.filter((f:any)=>!systemFieldKeys.has(f.sourceKey) || (f.scope==='target' && !parsed.data.targetEmployeeEnabled));
+  if(invalidSystemFields.length){ return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'يوجد اختيار غير صالح ضمن بيانات النظام.',details:invalidSystemFields.map((f:any)=>({path:['systemFields',f.sourceKey],message:f.scope==='target'&&!parsed.data.targetEmployeeEnabled?'فعّل الموظف المعني أولًا.':'بيان النظام غير متاح.'}))},400); }
   const validation=validateModel({...normalized,allowedSubmitters:parsed.data.allowedSubmitters});
   const actor=actorId(c);
   try{
@@ -290,7 +366,6 @@ app.put('/admin/workflows/:id', async c=>{
       ...oldStages.filter((s:any)=>!oldIds.has(s.id)).map((s:any,i:number)=>c.env.DB.prepare(`UPDATE workflow_stages SET active=0,stage_order=? WHERE id=? AND workflow_id=?`).bind(-200000-i,s.id,workflowId)),
       c.env.DB.prepare(`UPDATE transaction_types SET name_ar=COALESCE(?,name_ar),description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND company_id IS NULL`).bind(parsed.data.nameAr??null,parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,existing.transaction_type_id),
       c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,workflowId),
-      c.env.DB.prepare(`INSERT INTO workflow_settings(workflow_id,subject_mode,updated_by) VALUES(?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET subject_mode=excluded.subject_mode,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(workflowId,parsed.data.subjectMode||'requester',actor),
       c.env.DB.prepare(`DELETE FROM workflow_transitions WHERE workflow_id=?`).bind(workflowId)
     ];
     for(const s of normalized.stages){
@@ -301,7 +376,7 @@ app.put('/admin/workflows/:id', async c=>{
       `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify({})));
     }
     for(const f of normalized.fields){
-      const config={...(f.config||{}),displayOnly:Boolean(f.displayOnly)};
+      const config={displayOnly:Boolean(f.displayOnly)};
       statements.push(c.env.DB.prepare(`
         INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
@@ -312,8 +387,13 @@ app.put('/admin/workflows/:id', async c=>{
       statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`)
         .bind(t.id,workflowId,t.fromStageId,t.toStageId??null,t.action,t.labelAr,t.condition?JSON.stringify(t.condition):null,t.sortOrder,t.active?1:0));
     }
+    statements.push(c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET target_employee_enabled=excluded.target_employee_enabled,target_employee_required=excluded.target_employee_required,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),workflowId,parsed.data.targetEmployeeEnabled?1:0,parsed.data.targetEmployeeRequired?1:0));
+    statements.push(c.env.DB.prepare(`DELETE FROM workflow_system_fields WHERE workflow_id=?`).bind(workflowId));
+    for(const f of parsed.data.systemFields){
+      statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.sourceKey,f.labelAr,f.sortOrder));
+    }
     await c.env.DB.batch(statements);
-  }catch(e){return errorResponse(c,'WORKFLOW-005',500,e);}
+  }catch(e){return workflowDbError(c,e);}
   await audit(c,'workflow_draft_saved','workflow',workflowId,{validationErrors:validation.errors.length,stageCount:normalized.stages.length,fieldCount:normalized.fields.length});
   return c.json({ok:true,validation});
 });
@@ -321,7 +401,11 @@ app.put('/admin/workflows/:id', async c=>{
 app.post('/admin/workflows/:id/validate', async c=>{
   const w=await loadWorkflow(c,c.req.param('id'));
   if(!w)return errorResponse(c,'WORKFLOW-003',404);
-  return c.json(validateModel({allowedSubmitters:w.workflow.allowed_submitters,stages:w.stages,fields:w.fields,transitions:w.transitions}));
+  const result=validateModel({allowedSubmitters:w.workflow.allowed_submitters,stages:w.stages,fields:w.fields,transitions:w.transitions});
+  if(w.requestSettings.targetEmployeeRequired && !w.requestSettings.targetEmployeeEnabled) result.errors.push({code:'TARGET_REQUIRED',message:'الموظف المعني مضبوط كمطلوب لكنه غير مفعّل.'});
+  if(!w.systemFields.some((x:any)=>x.scope==='requester')) result.warnings.push({code:'REQUESTER_DATA',message:'لم يختر المصمم أي بيانات نظامية لمقدم الطلب.'});
+  if(result.errors.length) result.valid=false;
+  return c.json(result);
 });
 
 app.post('/admin/workflows/:id/publish', async c=>{
@@ -330,6 +414,9 @@ app.post('/admin/workflows/:id/publish', async c=>{
   if(!w)return errorResponse(c,'WORKFLOW-003',404);
   if(w.workflow.status!=='draft')return errorResponse(c,'WORKFLOW-004',409);
   const validation=validateModel({allowedSubmitters:w.workflow.allowed_submitters,stages:w.stages,fields:w.fields,transitions:w.transitions});
+  if(w.requestSettings.targetEmployeeRequired && !w.requestSettings.targetEmployeeEnabled) validation.errors.push({code:'TARGET_REQUIRED',message:'الموظف المعني مضبوط كمطلوب لكنه غير مفعّل.'});
+  if(!w.systemFields.some((x:any)=>x.scope==='requester')) validation.warnings.push({code:'REQUESTER_DATA',message:'لم يختر المصمم أي بيانات نظامية لمقدم الطلب.'});
+  if(validation.errors.length) validation.valid=false;
   if(!validation.valid)return c.json({error:'WORKFLOW_VALIDATION',referenceId:crypto.randomUUID(),message:'لا يمكن اعتماد القالب قبل إصلاح أخطاء التحقق.',validation},400);
   try{
     await c.env.DB.batch([
@@ -337,20 +424,21 @@ app.post('/admin/workflows/:id/publish', async c=>{
       c.env.DB.prepare(`UPDATE workflow_definitions SET status='active',updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(actorId(c),id),
       c.env.DB.prepare(`UPDATE transaction_types SET status='active',updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(actorId(c),w.workflow.transaction_type_id)
     ]);
-  }catch(e){return errorResponse(c,'WORKFLOW-005',500,e);}
+  }catch(e){return workflowDbError(c,e);}
   await audit(c,'workflow_published','workflow',id,{version:w.workflow.version});
   return c.json({ok:true,status:'active'});
 });
 
 app.post('/admin/workflows/:id/deactivate', async c=>{
-  const w=await loadWorkflow(c,c.req.param('id'));
+  const id=c.req.param('id');
+  const w=await loadWorkflow(c,id);
   if(!w)return errorResponse(c,'WORKFLOW-003',404);
   try{
     await c.env.DB.batch([
       c.env.DB.prepare(`UPDATE workflow_definitions SET status='inactive',updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(actorId(c),id),
       c.env.DB.prepare(`UPDATE transaction_types SET status='inactive',updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(actorId(c),w.workflow.transaction_type_id)
     ]);
-  }catch(e){return errorResponse(c,'WORKFLOW-005',500,e);}
+  }catch(e){return workflowDbError(c,e);}
   await audit(c,'workflow_deactivated','workflow',id,{});
   return c.json({ok:true});
 });
@@ -358,11 +446,10 @@ app.post('/admin/workflows/:id/deactivate', async c=>{
 /* Isolated test environment: it only reads a draft and returns its definition.
    It never inserts employees, users, transactions, answers or history into D1. */
 app.post('/admin/transactions/cleanup', async c=>{
-  /* Super Admin only. Full Phase 6 data reset: runtime transactions AND workflow
-     templates/definitions/questions/stages/routes/conditions. Schema and Phase 1-5
-     entities remain untouched. No cleanup audit row is created because the purpose
-     of this action is to leave the transaction/workflow data layer empty. */
-  const tables = [
+  /* Super Admin only. Full Phase 6 reset. It is intentionally resilient to
+     partially applied Phase 6 migrations: missing Phase-6 tables are skipped,
+     while Phase 1-5 tables are never referenced. */
+  const tables=[
     'transaction_attachments',
     'transaction_feedback',
     'transaction_actions',
@@ -372,33 +459,39 @@ app.post('/admin/transactions/cleanup', async c=>{
     'transaction_sequences',
     'workflow_transitions',
     'workflow_conditions',
+    'workflow_questions_v2',
     'workflow_questions',
+    'workflow_system_fields',
+    'workflow_request_settings',
     'workflow_fields',
     'workflow_stages',
-    'workflow_settings',
     'workflow_definitions',
     'transaction_type_companies',
     'transaction_types'
   ];
   try{
-    const counts = await Promise.all(tables.map(async table=>{
+    const existingTables=(await Promise.all(tables.map(async table=>[table,await tableExists(c,table)] as const)))
+      .filter((x):x is readonly [string,true]=>x[1]);
+    const existing=existingTables.map(x=>x[0]);
+    const counts=await Promise.all(existing.map(async table=>{
       const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<any>();
       return [table,Number(row?.count||0)] as const;
     }));
-    await c.env.DB.batch(tables.map(table=>c.env.DB.prepare(`DELETE FROM ${table}`)));
-
-    /* Remove only Phase 6 audit records. The audit_logs table itself and all
-       Phase 1-5 audit history remain intact. */
-    await c.env.DB.batch([
-      c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource IN ('workflow','workflow_engine','transaction') OR action LIKE 'workflow_%' OR action LIKE 'transaction_%'`),
-      c.env.DB.prepare(`DELETE FROM audit_logs WHERE action IN ('workflow_template_created','workflow_draft_saved','workflow_published','workflow_deactivated','transaction_test_data_cleaned')`)
-    ]);
-
+    const cleanupStatements: D1PreparedStatement[]=[];
+    if(existing.length){
+      cleanupStatements.push(...existing.map(table=>c.env.DB.prepare(`DELETE FROM ${table}`)));
+    }
+    if(await tableExists(c,'audit_logs')){
+      cleanupStatements.push(c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource IN ('workflow','workflow_engine','transaction') OR action LIKE 'workflow_%' OR action LIKE 'transaction_%'`));
+    }
+    if(cleanupStatements.length){
+      await c.env.DB.batch(cleanupStatements);
+    }
     return c.json({
       ok:true,
       reset:true,
-      message:'تم تنظيف جميع بيانات Phase 6 الخاصة بالمعاملات وقوالب سير العمل. قاعدة البيانات جاهزة للبدء من الصفر.',
-      deleted: Object.fromEntries(counts)
+      message:'تم تصفير جميع بيانات Phase 6 الخاصة بالمعاملات وسير العمل. الاستوديو جاهز للبدء من الصفر.',
+      deleted:Object.fromEntries(counts)
     });
   }catch(e){
     return errorResponse(c,'PHASE6-RESET-001',500,e);

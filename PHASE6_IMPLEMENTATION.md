@@ -1,33 +1,43 @@
-# HR Nexus — Phase 6 Workflow Studio
+# HR Nexus Phase 6 — Workflow Studio
 
-Phase 6 is implemented as a generic workflow/transaction foundation with a platform-only **استوديو سير العمل** and an isolated **بيئة الاختبار**. Company transaction screens remain intentionally unavailable.
+## Scope
+Phase 6 is a generic Workflow / Transaction Engine foundation. The current UI exposes only the Workflow Studio and its isolated Test Environment. Company transaction screens are intentionally not exposed in the sidebar or routes for normal users.
 
-## Studio experience
-- Template list is the landing screen.
-- Creating a template is a full-page form, not a prompt/modal flow.
-- Every template starts as a Draft and creates the first stage automatically.
-- The transaction foundation is separated into:
-  - requester data selected from the real Phase 5 employee model
-  - optional subject employee, defaulting to the requester
-  - designer-created request questions/data
-  - dynamic stages
-- System data is selected from a server-defined Phase 5 catalog. The designer never types system source keys.
-- Examples include employee number, full name, job title, organization unit, position, manager, hire date, actual start date, contract data, salary components, GOSI and insurance data.
-- Sensitive data is marked in the Studio and must still respect runtime permissions when actual transactions are enabled.
-- Default stage-to-stage movement is implicit. Conditional routes are only added when a branch is actually needed.
-- The last actual stage completes the transaction; no artificial "final stage" exists.
+## Studio model
+1. Template identity: name, description, who may submit.
+2. System data: the designer selects requester and optional target-employee fields from the real HR Nexus data catalog. The selection stores the source mapping only; it does not duplicate employee data.
+3. Request data: only fields explicitly added by the designer appear. There are no hidden automatic notes or fields.
+4. Dynamic stages: each stage has its own name, responsibility, duration, fields and routes. Stage order is persisted in D1.
+5. Default routing: when no special route is configured, the engine uses the next persisted stage. A conditional route may branch to a configured target stage.
+6. Final completion: after the last real stage is successfully passed, the transaction becomes `مكتملة`. No synthetic "last stage" is created.
 
-## Preview vs Test
-- Preview is read-only visual rendering of the designed workflow.
-- Test is an A→Z behavioral simulation and does not create users, employees, transactions or runtime history in D1.
+## System-data catalog
+The catalog is exposed by `/api/workflows/admin/catalog` and contains mappings such as:
+- employee number
+- full name
+- national ID / residency
+- job title
+- actual start date
+- join date
+- organization unit
+- position
+- direct manager
+- work location
+- employment and contract data
+- salary components
+- GOSI / residency data
 
-## Draft and validation
-- Draft save accepts incomplete stage responsibility so a new draft can be safely saved.
-- Publish requires full model validation.
-- Schema validation failures return an error code, reference ID and safe field-level issues.
+Sensitive entries declare their required existing permission and remain subject to backend authorization at runtime.
 
 ## Database
-- `0010_phase6_rebuilt_engine.sql` provides Phase 6 indexes/reference permissions.
-- `0011_phase6_studio_settings.sql` adds only `workflow_settings`.
-- `db/PHASE6_FINAL_SYNC.sql` is the non-destructive manual synchronization script.
-- No Phase 1–5 data is dropped or recreated.
+`0011_phase6_system_data_catalog.sql` adds only:
+- `workflow_system_fields`
+- `workflow_request_settings`
+
+Both are scoped to workflow definitions and use foreign keys with cascade to Phase 6 parents only.
+
+## Error handling
+Workflow input validation returns `WORKFLOW-001` together with a reference ID and safe validation details. The Studio converts those details into a human-readable issue and jumps to the affected stage/field when possible.
+
+## Test Environment
+The Test Environment is isolated. It reads workflow definitions but does not insert real users, employees, transactions, answers or execution history into D1.
