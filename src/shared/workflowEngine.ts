@@ -44,14 +44,11 @@ export function resolveTransition(stages: WorkflowStageLike[], transitions: Work
   return { route: { action:'complete', label_ar:'إكمال', to_stage_id:null }, decision:'automatic-complete' as const };
 }
 
-export function getStageDelegation(stage: WorkflowStageLike, fields: WorkflowFieldLike[], values: Record<string,any>) {
+export function getStageDelegation(stage: WorkflowStageLike) {
   const config=stage.config??(stage.config_json?parseJson(stage.config_json,{}):{});
   const delegate=config?.delegate;
   if(!delegate?.enabled) return null;
-  const employeeField=fields.find(f=>f.id===delegate.employeeFieldId);
-  if(!employeeField) return { enabled:true, valid:false, employeeId:null, fieldId:delegate.employeeFieldId??null };
-  const key=employeeField.fieldKey??employeeField.field_key??'';
-  return { enabled:true, valid:(employeeField.fieldType??employeeField.field_type)==='employee' && !isEmptyValue(values[key]), employeeId:values[key]??null, fieldId:employeeField.id };
+  return { enabled:true, valid:true };
 }
 
 function parseJson(value:string|undefined, fallback:any){try{return value?JSON.parse(value):fallback;}catch{return fallback;}}

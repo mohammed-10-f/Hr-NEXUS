@@ -27,6 +27,7 @@ const fieldSchema = z.object({
   required: z.boolean(),
   displayOnly: z.boolean(),
   options: z.array(z.string().trim().min(1).max(160)).max(50),
+  staticText: z.string().trim().max(5000).optional().default(''),
   sortOrder: z.number().int().min(0).max(10000)
 });
 const stageSchema = z.object({
@@ -195,19 +196,7 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     if(['select','multiselect'].includes(f.fieldType??f.field_type) && !(f.options??[]).length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
   });
   const stageIndex=new Map(stages.map((s:any,i:number)=>[s.id,i]));
-  for(const s of stages){
-    const config=s.config??safeJson(s.config_json,{});
-    const delegate=config?.delegate;
-    if(delegate?.enabled){
-      const field=fieldById.get(delegate.employeeFieldId);
-      const currentIndex=stageIndex.get(s.id)??-1;
-      const fieldIndex=field?.stageId?stageIndex.get(field.stageId)??-1:-1;
-      if(!field || (field.fieldType??field.field_type)!=='employee') out.errors.push({code:'DELEGATE_FIELD',message:'تم تفعيل التمرير لموظف آخر دون اختيار عنصر «اختيار موظف».',stageId:s.id});
-      else if(field.config?.displayOnly===true) out.errors.push({code:'DELEGATE_READONLY',message:'عنصر الموظف المفوّض يجب أن يكون قابلًا للاختيار وليس للعرض فقط.',stageId:s.id,fieldId:field.id});
-      else if(Number(field.required)!==1 && field.required!==true) out.errors.push({code:'DELEGATE_REQUIRED',message:'عنصر الموظف المفوّض يجب أن يكون مطلوبًا حتى يضمن المحرك وجود موظف قبل التمرير.',stageId:s.id,fieldId:field.id});
-      else if(fieldIndex>currentIndex) out.errors.push({code:'DELEGATE_FUTURE',message:'عنصر الموظف المفوّض يجب أن يكون متاحًا قبل أو داخل هذه المرحلة.',stageId:s.id,fieldId:field.id});
-    }
-  }
+  // Delegation is an optional stage capability. It is intentionally not coupled to any required field.
   data.transitions.forEach((t:any)=>{
     const from=t.fromStageId??t.from_stage_id;
     const to=t.toStageId??t.to_stage_id??null;
@@ -389,7 +378,7 @@ app.put('/admin/workflows/:id', async c=>{
       `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify(s.config??{})));
     }
     for(const f of normalized.fields){
-      const config={displayOnly:Boolean(f.displayOnly)};
+      const config={displayOnly:Boolean(f.displayOnly), staticText:String(f.staticText||'')};
       statements.push(c.env.DB.prepare(`
         INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
@@ -567,7 +556,7 @@ app.get('/test/templates/:id', async c=>{
   const workflow=await loadWorkflow(c,workflowId);
   if(!workflow)return errorResponse(c,'WORKFLOW-003',404);
   const validation=validateModel({allowedSubmitters:workflow.workflow.allowed_submitters,stages:workflow.stages,fields:workflow.fields,transitions:workflow.transitions});
-  return c.json({type,workflow,validation,testRequester:{name:'بيئة الاختبار',employeeNumber:'TEST-REQUESTER',jobTitle:'بيانات محاكاة',organizationUnit:'بيئة الاختبار',position:'بيئة الاختبار',manager:'بيئة الاختبار'}});
+  return c.json({type,workflow,validation,testRequester:{name:'موظف الاختبار',employeeNumber:'SIM-0001',jobTitle:'بيانات وظيفية محاكاة',organizationUnit:'الوحدة التنظيمية المحاكاة',position:'المنصب المحاكى',manager:'المدير المباشر المحاكى'},testExecutor:{platformUserId:actorId(c),displayName:'مدير النظام',username:'superadmin',role:'Super Admin'}});
 });
 
 export default app;

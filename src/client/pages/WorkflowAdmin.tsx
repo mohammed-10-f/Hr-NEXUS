@@ -51,6 +51,7 @@ type Field = {
   fieldType: string;
   required: boolean;
   displayOnly: boolean;
+  staticText: string;
   options: string[];
   sortOrder: number;
 };
@@ -115,7 +116,7 @@ const groupIcons: Record<string, any> = {
 const uid = () => crypto.randomUUID();
 const makeFieldKey = (n: number) => `question_${n}`;
 const blankStage = (n: number): Stage => ({ id: uid(), nameAr: `المرحلة ${n}`, responsibleType: 'company_admin', responsibleValue: '', durationMinutes: null, stageOrder: n, delegateEnabled: false, delegateFieldId: '' });
-const blankField = (stageId: string | null, n: number): Field => ({ id: uid(), stageId, fieldKey: makeFieldKey(n), labelAr: '', fieldType: 'text', required: false, displayOnly: false, options: [], sortOrder: n });
+const blankField = (stageId: string | null, n: number, displayOnly = false): Field => ({ id: uid(), stageId, fieldKey: makeFieldKey(n), labelAr: displayOnly ? 'نص للعرض' : `عنصر ${n}`, fieldType: 'text', required: false, displayOnly, staticText: displayOnly ? 'اكتب هنا النص الذي سيظهر للمستخدم كما هو.' : '', options: [], sortOrder: n });
 
 function getErrorDetails(e: any): ErrorDetail[] { return Array.isArray(e?.details) ? e.details : []; }
 function errorText(e: any, fallback: string) {
@@ -201,7 +202,7 @@ export function WorkflowAdmin() {
     setSystemFields((w.systemFields || []).map((x: any) => ({ sourceKey: x.source_key, scope: x.scope, labelAr: x.label_ar, sortOrder: Number(x.sort_order || 0) })));
     const ss = w.stages.map((x: any, i: number) => ({ id: x.id, nameAr: x.name_ar, responsibleType: x.responsible_type, responsibleValue: x.responsible_value || '', durationMinutes: x.duration_minutes === null ? null : Number(x.duration_minutes), stageOrder: i + 1, delegateEnabled: Boolean(x.config?.delegate?.enabled), delegateFieldId: x.config?.delegate?.employeeFieldId || '' }));
     setStages(ss); setSelectedStage(ss[0]?.id || '');
-    setFields(w.fields.map((x: any) => ({ id: x.id, stageId: x.stage_id || null, fieldKey: x.field_key, labelAr: x.label_ar, fieldType: ['text','textarea','boolean','select'].includes(x.field_type) ? x.field_type : 'text', required: Boolean(x.required), displayOnly: Boolean(x.config?.displayOnly), options: x.options || [], sortOrder: Number(x.sort_order || 0) })));
+    setFields(w.fields.map((x: any) => ({ id: x.id, stageId: x.stage_id || null, fieldKey: x.field_key, labelAr: x.label_ar, fieldType: x.field_type, required: Boolean(x.required), displayOnly: Boolean(x.config?.displayOnly), staticText: String(x.config?.staticText || ''), options: x.options || [], sortOrder: Number(x.sort_order || 0) })));
     setRoutes(w.transitions.map((x: any) => ({ id: x.id, fromStageId: x.from_stage_id, toStageId: x.to_stage_id || null, action: x.action, labelAr: x.label_ar, condition: x.condition || null, sortOrder: Number(x.sort_order || 0), active: Boolean(x.active) })));
     setValidation(null); setNotice(''); setSystemPanel(null); setRightTab('summary');
   }
@@ -235,7 +236,7 @@ export function WorkflowAdmin() {
     const j = index + dir; if (j < 0 || j >= stages.length) return;
     const next = [...stages]; [next[index], next[j]] = [next[j], next[index]]; setStages(next.map((s, i) => ({ ...s, stageOrder: i + 1 })));
   }
-  function addField(stageId: string | null) { setFields([...fields, blankField(stageId, fields.length + 1)]); }
+  function addField(stageId: string | null, displayOnly = false) { setFields([...fields, blankField(stageId, fields.length + 1, displayOnly)]); }
   function removeField(id: string) { setFields(fields.filter(f => f.id !== id)); setRoutes(routes.map(r => r.condition?.fieldId === id ? { ...r, condition: null } : r)); }
   function updateField(id: string, patch: Partial<Field>) { setFields(fs => fs.map(f => f.id === id ? { ...f, ...patch } : f)); }
   function addRoute(stageId: string) {
@@ -288,15 +289,7 @@ export function WorkflowAdmin() {
     stages.forEach(s => {
       if (!s.nameAr.trim()) errs.push({ code: 'STAGE_NAME', message: 'اسم المرحلة مطلوب.', stageId: s.id });
       if (['role', 'permission'].includes(s.responsibleType) && !s.responsibleValue.trim()) errs.push({ code: 'RESPONSIBLE_VALUE', message: `حدد ${responsibility[s.responsibleType]} لـ«${s.nameAr || 'المرحلة'}».`, stageId: s.id });
-      if (s.delegateEnabled) {
-        const employeeField = fields.find(f => f.id === s.delegateFieldId);
-        const sIndex = stages.findIndex(x => x.id === s.id);
-        const fIndex = employeeField?.stageId ? stages.findIndex(x => x.id === employeeField.stageId) : -1;
-        if (!employeeField || employeeField.fieldType !== 'employee') errs.push({ code: 'DELEGATE_FIELD', message: `حدد عنصر «اختيار موظف» لتمرير المعاملة من «${s.nameAr || 'المرحلة'}».`, stageId: s.id, fieldId: s.delegateFieldId || undefined });
-        else if (employeeField.displayOnly) errs.push({ code: 'DELEGATE_READONLY', message: 'عنصر الموظف المفوّض يجب أن يكون قابلًا للاختيار وليس للعرض فقط.', stageId: s.id, fieldId: employeeField.id });
-        else if (!employeeField.required) errs.push({ code: 'DELEGATE_REQUIRED', message: 'اجعل عنصر الموظف المفوّض مطلوبًا حتى يضمن المحرك وجود موظف قبل التمرير.', stageId: s.id, fieldId: employeeField.id });
-        else if (fIndex > sIndex) errs.push({ code: 'DELEGATE_FUTURE', message: 'لا يمكن أن يكون عنصر الموظف المفوّض في مرحلة لم تُنفذ بعد.', stageId: s.id, fieldId: employeeField.id });
-      }
+      // Delegation is an optional stage capability; it never makes an employee field required.
     });
     setValidation({ valid: !errs.length, errors: errs, warnings: [] });
     if (errs[0]) { setError(errs[0].message); if (errs[0].fieldId) requestAnimationFrame(() => document.getElementById(`wf-field-${errs[0].fieldId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); else if (errs[0].stageId) scrollTo(errs[0].stageId); }
@@ -304,15 +297,31 @@ export function WorkflowAdmin() {
   }
   async function save(runValidation = false) {
     if (!type || !workflow || saving) return;
-    if (!localValidation()) return;
+    if (runValidation && !localValidation()) return;
     setSaving(true); setError(''); setNotice('');
     try {
-      const r = await api<any>(`/api/workflows/admin/workflows/${workflow.id}`, { method: 'PUT', body: JSON.stringify({ transactionTypeId: type.id, nameAr: name.trim(), description: description.trim() || null, allowedSubmitters: submitters, stages: stages.map(s => ({ ...s, config: { delegate: { enabled: s.delegateEnabled, employeeFieldId: s.delegateFieldId || null } } })), fields, transitions: routes, systemFields, targetEmployeeEnabled: targetEnabled, targetEmployeeRequired: targetRequired }) });
-      setValidation(r.validation); setNotice('تم حفظ المسودة بنجاح.');
+      const safeFields = fields.map((f, i) => ({ ...f, labelAr: f.labelAr.trim() || `عنصر ${i + 1}`, staticText: f.staticText || '' }));
+      setFields(safeFields);
+      const payload = {
+        transactionTypeId: type.id,
+        nameAr: name.trim() || type.name_ar,
+        description: description.trim() || null,
+        allowedSubmitters: submitters.length ? submitters : ['self'],
+        stages: stages.map(s => ({ ...s, nameAr: s.nameAr.trim() || `المرحلة ${s.stageOrder}`, config: { delegate: { enabled: Boolean(s.delegateEnabled) } } })),
+        fields: safeFields,
+        transitions: routes,
+        systemFields,
+        targetEmployeeEnabled: targetEnabled,
+        targetEmployeeRequired: targetRequired
+      };
+      const r = await api<any>(`/api/workflows/admin/workflows/${workflow.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      setValidation(r.validation);
+      setNotice(runValidation ? 'تم حفظ المسودة وتشغيل فحص الجودة.' : 'تم حفظ المسودة بنجاح.');
       if (runValidation) setValidation(await api<any>(`/api/workflows/admin/workflows/${workflow.id}/validate`, { method: 'POST' }));
       await loadList();
     } catch (e: any) {
-      const details = getErrorDetails(e); const human = details[0] ? pathLabel(details[0]) : errorText(e, 'تعذر حفظ المسودة.');
+      const details = getErrorDetails(e);
+      const human = details[0] ? pathLabel(details[0]) : errorText(e, 'تعذر حفظ المسودة.');
       setError(human);
       if (details.length) setValidation({ valid: false, errors: details.map(d => ({ message: pathLabel(d), stageId: d.path?.includes('stages') ? stages[0]?.id : undefined })), warnings: [] });
     } finally { setSaving(false); }
@@ -382,7 +391,7 @@ export function WorkflowAdmin() {
         </section>
 
         <section id="wf-request-data" className="wf-card wf-section-card">
-          <SectionTitle number="03" eyebrow="بيانات الطلب" title="الأسئلة والعناصر" subtitle="كل عنصر يضيفه المصمم هنا يظهر في أساس المعاملة. لا توجد حقول تلقائية ولا ملاحظات مخفية." action={<button className="wf-secondary-action" onClick={() => addField(null)}><Plus size={16}/>إضافة سؤال</button>} />
+          <SectionTitle number="03" eyebrow="بيانات الطلب" title="الأسئلة والعناصر" subtitle="كل عنصر يضيفه المصمم هنا يظهر في أساس المعاملة. لا توجد حقول تلقائية ولا ملاحظات مخفية." action={<div className="wf-title-actions"><button className="wf-secondary-action" onClick={() => addField(null)}><Plus size={16}/>إضافة سؤال</button><button className="wf-secondary-action" onClick={() => addField(null, true)}><FileText size={14}/>إضافة نص للعرض</button></div>} />
           <FieldEditor fields={fields.filter(f => !f.stageId)} onUpdate={updateField} onRemove={removeField} />
         </section>
 
@@ -395,8 +404,8 @@ export function WorkflowAdmin() {
             return <article key={s.id} ref={el => {stageRefs.current[s.id]=el}} className={`wf-stage-card ${selectedStage===s.id?'focus':''}`} onFocus={() => setSelectedStage(s.id)}>
               <div className="wf-stage-top"><div className="wf-stage-heading"><span className="wf-stage-number">{i+1}</span><div><span className="wf-stage-kicker">STAGE {String(i+1).padStart(2,'0')}</span><input value={s.nameAr} className="wf-stage-name-input" onChange={e => setStages(stages.map(x => x.id===s.id?{...x,nameAr:e.target.value}:x))} placeholder="اسم المرحلة" /></div></div><div className="wf-stage-actions"><button className="wf-icon-action" title="نقل لأعلى" disabled={i===0} onClick={()=>moveStage(i,-1)}><ArrowUp size={15}/></button><button className="wf-icon-action" title="نقل لأسفل" disabled={i===stages.length-1} onClick={()=>moveStage(i,1)}><ArrowDown size={15}/></button><button className="wf-icon-action danger" title="حذف المرحلة" disabled={stages.length===1} onClick={()=>removeStage(s.id)}><Trash2 size={15}/></button></div></div>
               <div className="wf-stage-meta-grid"><label className="wf-input-group"><span>مسؤول المرحلة</span><div className="wf-select-with-icon"><ResponsibilityIcon size={15}/><select value={s.responsibleType} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleType:e.target.value,responsibleValue:''}:x))}>{Object.entries(responsibility).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div></label>{s.responsibleType==='role'&&<label className="wf-input-group"><span>الدور</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الدور</option>{(catalog?.roles||[]).map(r=><option key={r.code} value={r.code}>{r.nameAr}</option>)}</select></label>}{s.responsibleType==='permission'&&<label className="wf-input-group"><span>الصلاحية</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الصلاحية</option>{(catalog?.permissions||[]).map(p=><option key={p.id} value={p.id}>{p.nameAr}</option>)}</select></label>}<label className="wf-input-group"><span>مدة المرحلة <em>اختياري</em></span><div className="wf-input-icon"><Clock3 size={15}/><input type="number" min="1" value={s.durationMinutes??''} placeholder="بدون حد" onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,durationMinutes:e.target.value?Number(e.target.value):null}:x))}/></div></label></div>
-              <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>تمرير المعاملة لموظف آخر</strong></div><p>عند تفعيلها يمكن للمسؤول الحالي إرسال المعاملة إلى موظف محدد، وبعد إكمال الموظف للمهمة تعود المعاملة تلقائيًا إلى هذه المرحلة لاستكمالها.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:e.target.checked?x.delegateFieldId:'',}:x))}/><span className="wf-toggle"><i /></span><b>تفعيل التمرير لموظف آخر</b></label>{s.delegateEnabled&&<label className="wf-input-group"><span>عنصر اختيار الموظف</span><select value={s.delegateFieldId} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateFieldId:e.target.value}:x))}><option value="">اختر عنصر الموظف</option>{fields.filter(f=>f.fieldType==='employee' && (!f.stageId || stages.findIndex(x=>x.id===f.stageId)<=i)).map(f=><option key={f.id} value={f.id}>{f.labelAr||'اختيار موظف'}</option>)}</select></label>}</div></div>
-              <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة يمكن استخدامها كقرارات عند الحاجة.</span></div><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
+              <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>التمرير لموظف آخر</strong><span className="wf-optional-badge">اختياري</span></div><p>يمكن للمسؤول، أثناء معالجة المرحلة، أن يختار «تمرير لموظف آخر» عند الحاجة. إذا لم يختره تستمر المعاملة بشكل طبيعي. بعد إكمال المهمة تعود تلقائيًا إلى هذه المرحلة.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:''}:x))}/><span className="wf-toggle"><i /></span><b>{s.delegateEnabled?'السماح بالتمرير لموظف آخر':'لا تسمح بالتمرير لموظف آخر'}</b></label>{s.delegateEnabled&&<div className="wf-delegation-note"><CheckCircle2 size={14}/> يظهر خيار التمرير فقط عند الحاجة ولا يجعل أي عنصر في المرحلة إلزاميًا.</div>}</div></div>
+              <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة والحقول يمكن استخدامها كقرارات عند الحاجة، والنصوص للعرض فقط.</span></div><div className="wf-title-actions"><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button><button className="wf-secondary-action small" onClick={()=>addField(s.id,true)}><FileText size={13}/>إضافة نص</button></div></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
               <div className="wf-route-block"><div className="wf-route-head"><div><strong>المسار</strong><span>{i===stages.length-1?'الإكمال هو المسار الافتراضي. ويمكن للفرع المشروط إعادة المعاملة إلى مرحلة سابقة أو إنهاؤها وفق القرار.':'المسار الافتراضي تلقائي إلى المرحلة التالية. أضف فرعًا مشروطًا فقط عندما تريد تغيير هذا المسار.'}</span></div><button className="wf-secondary-action small" onClick={()=>addRoute(s.id)}><GitBranch size={14}/>إضافة فرع مشروط</button></div><div className="wf-condition-principle"><GitBranch size={15}/><span><b>فلسفة الشرط:</b> يختبر المحرك الشروط أولًا بالترتيب. إذا تحقق شرط ينتقل حسب المسار الذي صممته. إذا لم يتحقق أي شرط، يعود للمسار الافتراضي تلقائيًا — للمرحلة التالية، أو للإكمال إذا كانت هذه آخر مرحلة.</span></div><RouteEditor stage={s} stages={stages} fields={fields} routes={stageRoutes} onChange={r=>setRoutes(routes.map(x=>x.id===r.id?r:x))} onAdd={()=>addRoute(s.id)} onRemove={id=>setRoutes(routes.filter(x=>x.id!==id))} />{i===stages.length-1&&<div className="wf-complete-note"><CheckCircle2 size={17}/><span><b>نهاية منطقية للمسار</b> — هذه آخر مرحلة فعلية باسمها الحالي. بدون شرط مطابق تكتمل المعاملة، ومع شرط مطابق يمكن إرجاعها لمرحلة سابقة.</span></div>}</div>
             </article>;
           })}</div>
@@ -438,14 +447,39 @@ function SystemFieldPicker({scope,catalog,selected,search,onSearch,onToggle,onCl
 }
 
 function FieldEditor({fields,onUpdate,onRemove}:{fields:Field[];onUpdate:(id:string,patch:Partial<Field>)=>void;onRemove:(id:string)=>void}) {
-  if(!fields.length) return <div className="wf-empty-question"><div><Layers3 size={18}/></div><section><strong>لا توجد عناصر بعد</strong><span>أضف أول عنصر لتحديد البيانات التي سيدخلها المستخدم أو يجيب عنها.</span></section></div>;
+  if(!fields.length) return <div className="wf-empty-question"><div><Layers3 size={18}/></div><section><strong>لا توجد عناصر بعد</strong><span>أضف سؤالًا ليقوم المستخدم بالإجابة عليه، أو أضف نصًا للعرض يبقى ثابتًا في النموذج.</span></section></div>;
   return <div className="wf-field-stack">{fields.map((f,i)=>{
+    const isStatic=f.displayOnly;
     const showOptions=['select','multiselect'].includes(f.fieldType);
-    const typeHelp=f.fieldType==='employee'?'هذا العنصر يتيح للمستخدم اختيار موظف من بيانات الشركة الحقيقية عند التشغيل. اختياره وحده لا يغيّر المسار إلا إذا استخدمته في شرط أو كموظف مفوّض.':f.fieldType==='date'?'تاريخ يختاره المستخدم ويُحفظ كقيمة معاملة قابلة للاستخدام في الشروط.':f.fieldType==='datetime'?'تاريخ ووقت يختاره المستخدم ويمكن استخدامه لاحقًا في الشروط.':f.fieldType==='boolean'?'إجابة نعم/لا يمكن استخدامها كقرار مباشر لتحديد المسار.':'يمكن استخدام إجابة هذا العنصر داخل شروط المسارات.';
-    return <article id={`wf-field-${f.id}`} key={f.id} className="wf-field-card"><div className="wf-field-index">{i+1}</div><div className="wf-field-body"><div className="wf-field-row-top"><label className="wf-input-group"><span>اسم السؤال / العنصر</span><input value={f.labelAr} onChange={e=>onUpdate(f.id,{labelAr:e.target.value})} placeholder="مثال: سبب الطلب" /></label><label className="wf-input-group"><span>نوع الإجابة</span><select value={f.fieldType} onChange={e=>onUpdate(f.id,{fieldType:e.target.value,options:['select','multiselect'].includes(e.target.value)?f.options:[]})}>{Object.entries(fieldTypes).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label></div>{showOptions&&<label className="wf-input-group"><span>الخيارات</span><input value={f.options.join('، ')} onChange={e=>onUpdate(f.id,{options:e.target.value.split(/[,،\n]/).map(x=>x.trim()).filter(Boolean)})} placeholder="مثال: نعم، لا" /></label>}<div className="wf-field-help"><span>{typeHelp}</span><label className="wf-check-toggle"><input type="checkbox" checked={f.required} onChange={e=>onUpdate(f.id,{required:e.target.checked,displayOnly:e.target.checked?false:f.displayOnly})}/><span/>مطلوب</label><label className="wf-check-toggle"><input type="checkbox" checked={f.displayOnly} onChange={e=>onUpdate(f.id,{displayOnly:e.target.checked,required:e.target.checked?false:f.required})}/><span/>عرض فقط</label></div></div><button className="wf-delete-field" title="حذف العنصر" onClick={()=>onRemove(f.id)}><Trash2 size={16}/></button></article>;
+    const typeHelp=isStatic
+      ? 'هذا نص عرض فقط. لا يطلب إجابة ولا يؤثر في المسار إلا إذا استخدمت عنصرًا آخر في الشرط.'
+      : f.fieldType==='employee'
+      ? 'اختيار الموظف يحفظ كبيانات في المعاملة. لا يغيّر المسار بمفرده؛ استخدمه في شرط أو فعّل «التمرير لموظف آخر» كخيار مستقل.'
+      : f.fieldType==='date'
+      ? 'تاريخ يختاره المستخدم ويمكن الاعتماد عليه في الشروط.'
+      : f.fieldType==='datetime'
+      ? 'تاريخ ووقت يختاره المستخدم ويمكن الاعتماد عليه في الشروط.'
+      : f.fieldType==='boolean'
+      ? 'إجابة نعم/لا مناسبة جدًا لفروع القرار.'
+      : 'يمكن استخدام إجابة هذا العنصر ضمن شروط المسار.';
+    return <article id={`wf-field-${f.id}`} key={f.id} className={`wf-field-card ${isStatic?'display-only':''}`}>
+      <div className="wf-field-index">{i+1}</div>
+      <div className="wf-field-body">
+        <div className="wf-field-row-top">
+          <label className="wf-input-group"><span>{isStatic?'عنوان النص':'اسم السؤال / العنصر'}</span><input value={f.labelAr} onChange={e=>onUpdate(f.id,{labelAr:e.target.value})} placeholder={isStatic?'مثال: تنبيه مهم':'مثال: سبب الطلب'} /></label>
+          <label className="wf-input-group"><span>نوع العنصر</span><select value={isStatic?'static_text':f.fieldType} onChange={e=>{const v=e.target.value;if(v==='static_text'){onUpdate(f.id,{fieldType:'text',displayOnly:true,required:false,staticText:f.staticText||'اكتب النص الذي سيظهر للمستخدم.'});}else{onUpdate(f.id,{fieldType:v,displayOnly:false,staticText:'',options:['select','multiselect'].includes(v)?f.options:[]});}}}>
+            {Object.entries(fieldTypes).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+            <option value="static_text">نص للعرض فقط</option>
+          </select></label>
+        </div>
+        {isStatic&&<label className="wf-input-group"><span>النص المعروض</span><textarea rows={3} value={f.staticText} onChange={e=>onUpdate(f.id,{staticText:e.target.value})} placeholder="اكتب التعليمات أو التنبيه الذي سيظهر كما هو للمستخدم." /></label>}
+        {showOptions&&!isStatic&&<label className="wf-input-group"><span>الخيارات</span><input value={f.options.join('، ')} onChange={e=>onUpdate(f.id,{options:e.target.value.split(/[,،\n]/).map(x=>x.trim()).filter(Boolean)})} placeholder="مثال: نعم، لا" /></label>}
+        <div className="wf-field-help"><span>{typeHelp}</span>{!isStatic&&<><label className="wf-check-toggle"><input type="checkbox" checked={f.required} onChange={e=>onUpdate(f.id,{required:e.target.checked,displayOnly:e.target.checked?false:f.displayOnly})}/><span/>مطلوب</label></>}<label className="wf-check-toggle"><input type="checkbox" checked={isStatic} onChange={e=>{const on=e.target.checked;onUpdate(f.id,{displayOnly:on,required:on?false:f.required,staticText:on?(f.staticText||'اكتب النص الذي سيظهر للمستخدم.'):''})}}/><span/>عرض فقط</label></div>
+      </div>
+      <button type="button" className="wf-delete-field" title="حذف العنصر" onClick={()=>onRemove(f.id)}><Trash2 size={16}/></button>
+    </article>;
   })}</div>;
 }
-
 function makeConditionForField(field: Field): Route['condition'] {
   if(field.fieldType === 'boolean') return { fieldId: field.id, operator: 'equals', values: ['نعم'] };
   if(field.fieldType === 'employee') return { fieldId: field.id, operator: 'is_not_empty', values: [] };
@@ -455,7 +489,7 @@ function makeConditionForField(field: Field): Route['condition'] {
 
 function RouteEditor({stage,stages,fields,routes,onChange,onAdd,onRemove}:{stage:Stage;stages:Stage[];fields:Field[];routes:Route[];onChange:(r:Route)=>void;onAdd:()=>void;onRemove:(id:string)=>void}) {
   const index=stages.findIndex(s=>s.id===stage.id);
-  const sourceFields=fields.filter(f=>{const sid=f.stageId;return !sid||stages.findIndex(s=>s.id===sid)<=index});
+  const sourceFields=fields.filter(f=>!f.displayOnly).filter(f=>{const sid=f.stageId;return !sid||stages.findIndex(s=>s.id===sid)<=index});
   if(!routes.length) return <div className="wf-route-default"><div className="wf-route-default-icon"><GitBranch size={17}/></div><div><strong>المسار الافتراضي جاهز</strong><span>{index<stages.length-1?'يمرر المحرك الطلب تلقائيًا إلى المرحلة التالية.':'يكمل المحرك المعاملة تلقائيًا بعد نجاح هذه المرحلة.'}</span></div></div>;
   const operatorOptions=(field?:Field)=>{
     if(field?.fieldType==='boolean') return [['equals','يساوي'],['not_equals','لا يساوي'],['is_true','نعم'],['is_false','لا'],['is_empty','فارغ'],['is_not_empty','معبأ']];
