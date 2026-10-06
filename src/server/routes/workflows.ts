@@ -56,17 +56,19 @@ const transitionSchema = z.object({
   active: z.boolean()
 });
 const systemFieldSchema = z.object({ sourceKey: z.string().trim().min(1).max(120), scope: z.enum(['requester','target']), labelAr: z.string().trim().min(1).max(180), sortOrder: z.number().int().min(0).max(1000) });
+// Draft save accepts partial payloads for compatibility with older/stale clients.
+// The server merges omitted sections from the persisted draft before applying changes.
 const workflowSchema = z.object({
   transactionTypeId: z.string().uuid(),
   nameAr: z.string().trim().min(1).max(180).optional(),
   description: z.string().trim().max(1000).nullable().optional(),
-  allowedSubmitters: z.array(z.string().min(1).max(120)).min(1).max(20),
+  allowedSubmitters: z.array(z.string().min(1).max(120)).min(1).max(20).optional(),
   stages: z.array(stageSchema).min(1).max(100).optional(),
-  fields: z.array(fieldSchema).max(1000).optional().default([]),
-  transitions: z.array(transitionSchema).max(1000).optional().default([]),
-  systemFields: z.array(systemFieldSchema).max(200).optional().default([]),
-  targetEmployeeEnabled: z.boolean(),
-  targetEmployeeRequired: z.boolean()
+  fields: z.array(fieldSchema).max(1000).optional(),
+  transitions: z.array(transitionSchema).max(1000).optional(),
+  systemFields: z.array(systemFieldSchema).max(200).optional(),
+  targetEmployeeEnabled: z.boolean().optional(),
+  targetEmployeeRequired: z.boolean().optional()
 });
 const systemFieldKeys = new Set(['employee_number','full_name','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','residency_classification']);
 
@@ -352,27 +354,49 @@ app.put('/admin/workflows/:id', async c=>{
   if(existing.status!=='draft')return errorResponse(c,'WORKFLOW-004',409);
   if(existing.transaction_type_id!==parsed.data.transactionTypeId){ const referenceId=crypto.randomUUID(); return c.json({error:'WORKFLOW-001',referenceId,message:'القالب المحدد لا يطابق نسخة سير العمل التي تحاول حفظها.',details:[{path:['transactionTypeId'],message:'أعد فتح القالب من قائمة قوالب المعاملات ثم حاول الحفظ مرة أخرى.'}]},400); }
 
-  // Draft saves must be resilient to older/stale clients that omit optional
-  // collections. If stages are omitted entirely, preserve the existing draft
-  // stages rather than rejecting the whole save with a Zod 'Required' error.
-  // An explicitly empty stages array is still invalid and is caught by
-  // validation/publish so a usable draft can never silently lose its stages.
-  let saveData:any = parsed.data;
-  if (!Array.isArray(parsed.data.stages)) {
-    const existingStages = (await c.env.DB.prepare(`SELECT id,name_ar,responsible_type,responsible_value,duration_minutes,stage_order,config_json FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(workflowId).all<any>()).results;
-    saveData = {
-      ...parsed.data,
-      stages: existingStages.map((s:any)=>({
-        id:s.id, nameAr:s.name_ar, responsibleType:s.responsible_type,
-        responsibleValue:s.responsible_value ?? null, durationMinutes:s.duration_minutes ?? null,
-        stageOrder:Number(s.stage_order || 0), config:safeJson(s.config_json,{})
-      }))
-    };
-  }
-  const normalized=normalizePayload(saveData);
-  const invalidSystemFields=parsed.data.systemFields.filter((f:any)=>!systemFieldKeys.has(f.sourceKey) || (f.scope==='target' && !parsed.data.targetEmployeeEnabled));
-  if(invalidSystemFields.length){ return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'يوجد اختيار غير صالح ضمن بيانات النظام.',details:invalidSystemFields.map((f:any)=>({path:['systemFields',f.sourceKey],message:f.scope==='target'&&!parsed.data.targetEmployeeEnabled?'فعّل الموظف المعني أولًا.':'بيان النظام غير متاح.'}))},400); }
-  const validation=validateModel({...normalized,allowedSubmitters:parsed.data.allowedSubmitters});
+  // Draft saves must be tolerant of partial/older clients. Merge only omitted
+  // sections from the current draft so an old client cannot trigger a false
+  // "stages required" error or accidentally erase existing design data.
+  const current=await loadWorkflow(c,workflowId);
+  if(!current) return errorResponse(c,'WORKFLOW-003',404);
+  const existingData={
+    stages: current.stages.map((s:any,i:number)=>({
+      id:s.id, nameAr:s.name_ar, responsibleType:s.responsible_type, responsibleValue:s.responsible_value??null,
+      durationMinutes:s.duration_minutes===null?null:Number(s.duration_minutes), stageOrder:Number(s.stage_order??(i+1)), config:s.config||{}
+    })),
+    fields: current.fields.map((f:any)=>({
+      id:f.id, stageId:f.stage_id??null, fieldKey:f.field_key, labelAr:f.label_ar, fieldType:f.field_type,
+      required:Boolean(f.required), displayOnly:Boolean(f.config?.displayOnly), staticText:String(f.config?.staticText||''),
+      options:Array.isArray(f.options)?f.options:[], sortOrder:Number(f.sort_order??0)
+    })),
+    transitions: current.transitions.map((t:any)=>({
+      id:t.id, fromStageId:t.from_stage_id, toStageId:t.to_stage_id??null, action:t.action, labelAr:t.label_ar,
+      condition:t.condition??null, sortOrder:Number(t.sort_order??0), active:Boolean(t.active)
+    })),
+    systemFields: current.systemFields.map((f:any)=>({sourceKey:f.source_key,scope:f.scope,labelAr:f.label_ar,sortOrder:Number(f.sort_order??0)})),
+    targetEmployeeEnabled:Boolean(current.requestSettings?.targetEmployeeEnabled),
+    targetEmployeeRequired:Boolean(current.requestSettings?.targetEmployeeRequired),
+    allowedSubmitters:Array.isArray(current.workflow?.allowed_submitters)?current.workflow.allowed_submitters:['self'],
+    nameAr:current.workflow?.name_ar||null,
+    description:current.workflow?.description??null
+  };
+  const data={
+    transactionTypeId:parsed.data.transactionTypeId,
+    nameAr:parsed.data.nameAr??existingData.nameAr??'معاملة',
+    description:parsed.data.description!==undefined?parsed.data.description:existingData.description,
+    allowedSubmitters:parsed.data.allowedSubmitters??existingData.allowedSubmitters,
+    stages:parsed.data.stages??existingData.stages,
+    fields:parsed.data.fields??existingData.fields,
+    transitions:parsed.data.transitions??existingData.transitions,
+    systemFields:parsed.data.systemFields??existingData.systemFields,
+    targetEmployeeEnabled:parsed.data.targetEmployeeEnabled??existingData.targetEmployeeEnabled,
+    targetEmployeeRequired:parsed.data.targetEmployeeRequired??existingData.targetEmployeeRequired
+  };
+
+  const normalized=normalizePayload(data);
+  const invalidSystemFields=data.systemFields.filter((f:any)=>!systemFieldKeys.has(f.sourceKey) || (f.scope==='target' && !data.targetEmployeeEnabled));
+  if(invalidSystemFields.length){ return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'يوجد اختيار غير صالح ضمن بيانات النظام.',details:invalidSystemFields.map((f:any)=>({path:['systemFields',f.sourceKey],message:f.scope==='target'&&!data.targetEmployeeEnabled?'فعّل الموظف المعني أولًا.':'بيان النظام غير متاح.'}))},400); }
+  const validation=validateModel({...normalized,allowedSubmitters:data.allowedSubmitters});
   const actor=actorId(c);
   try{
     const oldStages=(await c.env.DB.prepare(`SELECT id FROM workflow_stages WHERE workflow_id=?`).bind(workflowId).all<any>()).results;
@@ -383,8 +407,8 @@ app.put('/admin/workflows/:id', async c=>{
       ...oldStages.map((s:any,i:number)=>c.env.DB.prepare(`UPDATE workflow_stages SET stage_order=? WHERE id=? AND workflow_id=?`).bind(-100000-i,s.id,workflowId)),
       ...oldFields.filter((f:any)=>!oldFieldIds.has(f.id)).map((f:any)=>c.env.DB.prepare(`UPDATE workflow_fields SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=? AND workflow_id=?`).bind(f.id,workflowId)),
       ...oldStages.filter((s:any)=>!oldIds.has(s.id)).map((s:any,i:number)=>c.env.DB.prepare(`UPDATE workflow_stages SET active=0,stage_order=? WHERE id=? AND workflow_id=?`).bind(-200000-i,s.id,workflowId)),
-      c.env.DB.prepare(`UPDATE transaction_types SET name_ar=COALESCE(?,name_ar),description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND company_id IS NULL`).bind(parsed.data.nameAr??null,parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,existing.transaction_type_id),
-      c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(parsed.data.description??null,JSON.stringify(parsed.data.allowedSubmitters),actor,workflowId),
+      c.env.DB.prepare(`UPDATE transaction_types SET name_ar=COALESCE(?,name_ar),description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND company_id IS NULL`).bind(data.nameAr??null,data.description??null,JSON.stringify(data.allowedSubmitters),actor,existing.transaction_type_id),
+      c.env.DB.prepare(`UPDATE workflow_definitions SET description=?,allowed_submitters_json=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(data.description??null,JSON.stringify(data.allowedSubmitters),actor,workflowId),
       c.env.DB.prepare(`DELETE FROM workflow_transitions WHERE workflow_id=?`).bind(workflowId)
     ];
     for(const s of normalized.stages){
@@ -406,9 +430,9 @@ app.put('/admin/workflows/:id', async c=>{
       statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`)
         .bind(t.id,workflowId,t.fromStageId,t.toStageId??null,t.action,t.labelAr,t.condition?JSON.stringify(t.condition):null,t.sortOrder,t.active?1:0));
     }
-    statements.push(c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET target_employee_enabled=excluded.target_employee_enabled,target_employee_required=excluded.target_employee_required,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),workflowId,parsed.data.targetEmployeeEnabled?1:0,parsed.data.targetEmployeeRequired?1:0));
+    statements.push(c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET target_employee_enabled=excluded.target_employee_enabled,target_employee_required=excluded.target_employee_required,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),workflowId,data.targetEmployeeEnabled?1:0,data.targetEmployeeRequired?1:0));
     statements.push(c.env.DB.prepare(`DELETE FROM workflow_system_fields WHERE workflow_id=?`).bind(workflowId));
-    for(const f of parsed.data.systemFields){
+    for(const f of data.systemFields){
       statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.sourceKey,f.labelAr,f.sortOrder));
     }
     await c.env.DB.batch(statements);
