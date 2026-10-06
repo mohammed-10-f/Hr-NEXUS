@@ -61,10 +61,10 @@ const workflowSchema = z.object({
   nameAr: z.string().trim().min(1).max(180).optional(),
   description: z.string().trim().max(1000).nullable().optional(),
   allowedSubmitters: z.array(z.string().min(1).max(120)).min(1).max(20),
-  stages: z.array(stageSchema).min(1).max(100),
-  fields: z.array(fieldSchema).max(1000),
-  transitions: z.array(transitionSchema).max(1000),
-  systemFields: z.array(systemFieldSchema).max(200),
+  stages: z.array(stageSchema).min(1).max(100).optional(),
+  fields: z.array(fieldSchema).max(1000).optional().default([]),
+  transitions: z.array(transitionSchema).max(1000).optional().default([]),
+  systemFields: z.array(systemFieldSchema).max(200).optional().default([]),
   targetEmployeeEnabled: z.boolean(),
   targetEmployeeRequired: z.boolean()
 });
@@ -352,7 +352,24 @@ app.put('/admin/workflows/:id', async c=>{
   if(existing.status!=='draft')return errorResponse(c,'WORKFLOW-004',409);
   if(existing.transaction_type_id!==parsed.data.transactionTypeId){ const referenceId=crypto.randomUUID(); return c.json({error:'WORKFLOW-001',referenceId,message:'القالب المحدد لا يطابق نسخة سير العمل التي تحاول حفظها.',details:[{path:['transactionTypeId'],message:'أعد فتح القالب من قائمة قوالب المعاملات ثم حاول الحفظ مرة أخرى.'}]},400); }
 
-  const normalized=normalizePayload(parsed.data);
+  // Draft saves must be resilient to older/stale clients that omit optional
+  // collections. If stages are omitted entirely, preserve the existing draft
+  // stages rather than rejecting the whole save with a Zod 'Required' error.
+  // An explicitly empty stages array is still invalid and is caught by
+  // validation/publish so a usable draft can never silently lose its stages.
+  let saveData:any = parsed.data;
+  if (!Array.isArray(parsed.data.stages)) {
+    const existingStages = (await c.env.DB.prepare(`SELECT id,name_ar,responsible_type,responsible_value,duration_minutes,stage_order,config_json FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(workflowId).all<any>()).results;
+    saveData = {
+      ...parsed.data,
+      stages: existingStages.map((s:any)=>({
+        id:s.id, nameAr:s.name_ar, responsibleType:s.responsible_type,
+        responsibleValue:s.responsible_value ?? null, durationMinutes:s.duration_minutes ?? null,
+        stageOrder:Number(s.stage_order || 0), config:safeJson(s.config_json,{})
+      }))
+    };
+  }
+  const normalized=normalizePayload(saveData);
   const invalidSystemFields=parsed.data.systemFields.filter((f:any)=>!systemFieldKeys.has(f.sourceKey) || (f.scope==='target' && !parsed.data.targetEmployeeEnabled));
   if(invalidSystemFields.length){ return c.json({error:'WORKFLOW-001',referenceId:crypto.randomUUID(),message:'يوجد اختيار غير صالح ضمن بيانات النظام.',details:invalidSystemFields.map((f:any)=>({path:['systemFields',f.sourceKey],message:f.scope==='target'&&!parsed.data.targetEmployeeEnabled?'فعّل الموظف المعني أولًا.':'بيان النظام غير متاح.'}))},400); }
   const validation=validateModel({...normalized,allowedSubmitters:parsed.data.allowedSubmitters});
