@@ -11,6 +11,7 @@ import company from './server/routes/company';
 import workflows from './server/routes/workflows';
 
 const app=new Hono<Env>();
+const BUILD_ID='PHASE6-SAVE-FIX-20261007';
 
 app.onError((err,c)=>{
   console.error('HR_NEXUS_UNHANDLED_ERROR',err);
@@ -19,7 +20,7 @@ app.onError((err,c)=>{
 });
 app.use('*',securityHeaders);
 app.use('/api/*',loadSession);
-app.get('/api/health',(c)=>c.json({ok:true,service:'hr-nexus',phase:2}));
+app.get('/api/health',(c)=>c.json({ok:true,service:'hr-nexus',phase:6,build:BUILD_ID}));
 app.route('/api/auth',auth);
 app.route('/api/platform',platform);
 app.route('/api/context',context);

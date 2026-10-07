@@ -37,7 +37,7 @@ const stageSchema = z.object({
   responsibleValue: z.string().trim().max(180).nullable(),
   durationMinutes: z.number().int().min(1).max(525600).nullable(),
   config: z.object({
-    delegate: z.object({ enabled: z.boolean(), employeeFieldId: z.string().uuid().nullable() }).optional()
+    delegate: z.object({ enabled: z.boolean(), employeeFieldId: z.string().uuid().nullable().optional() }).optional()
   }).optional()
 });
 const conditionSchema = z.object({

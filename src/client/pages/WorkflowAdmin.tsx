@@ -127,8 +127,9 @@ function errorText(e: any, fallback: string) {
 }
 function pathLabel(detail: ErrorDetail) {
   const path = detail.path || [];
-  const stageMatch = path.find(v => typeof v === 'number');
+  const stageMatch = path.find((v, i) => typeof v === 'number' && path[i-1] === 'stages');
   if (path.includes('systemFields')) return `بيانات النظام: ${detail.message || 'راجع الاختيار.'}`;
+  if (path.includes('employeeFieldId')) return `تفويض المرحلة: ${detail.message || 'راجع إعداد التمرير لموظف آخر.'}`;
   const labels: Record<string, string> = {
     nameAr: 'اسم المعاملة',
     allowedSubmitters: 'من يستطيع التقديم',
@@ -307,7 +308,7 @@ export function WorkflowAdmin() {
         nameAr: name.trim() || type.name_ar,
         description: description.trim() || null,
         allowedSubmitters: submitters.length ? submitters : ['self'],
-        stages: stages.map(s => ({ ...s, nameAr: s.nameAr.trim() || `المرحلة ${s.stageOrder}`, config: { delegate: { enabled: Boolean(s.delegateEnabled) } } })),
+        stages: stages.map(s => ({ ...s, nameAr: s.nameAr.trim() || `المرحلة ${s.stageOrder}`, config: { delegate: { enabled: Boolean(s.delegateEnabled), employeeFieldId: s.delegateFieldId || null } } })),
         fields: safeFields,
         transitions: routes,
         systemFields,
