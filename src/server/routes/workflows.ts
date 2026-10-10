@@ -42,7 +42,7 @@ const stageSchema = z.object({
 });
 const conditionSchema = z.object({
   fieldId: z.string().uuid(),
-  operator: z.enum(['equals','not_equals','contains','is_true','is_false','in','is_empty','is_not_empty']),
+  operator: z.enum(['equals','not_equals','contains','is_true','is_false','in','is_empty','is_not_empty','greater_than','greater_or_equal','less_than','less_or_equal']),
   values: z.array(z.string()).max(20)
 });
 const transitionSchema = z.object({
@@ -70,7 +70,7 @@ const workflowSchema = z.object({
   targetEmployeeEnabled: z.boolean().optional(),
   targetEmployeeRequired: z.boolean().optional()
 });
-const systemFieldKeys = new Set(['employee_number','full_name','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','residency_classification']);
+const systemFieldKeys = new Set(['employee_number','full_name','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','insurance_number','insurance_provider','insurance_class','professional_hazard','residency_classification']);
 
 const safeJson = (value: any, fallback: any) => {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
@@ -195,10 +195,27 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     const sid=f.stageId??f.stage_id??null;
     if(sid && !stageIds.has(sid)) out.errors.push({code:'FIELD_STAGE',message:'العنصر مرتبط بمرحلة غير موجودة.',fieldId:id});
     if((f.required===true || Number(f.required)===1) && (f.displayOnly===true || f.config?.displayOnly===true)) out.errors.push({code:'READONLY_REQUIRED',message:'العنصر للعرض فقط ولا يمكن أن يكون مطلوبًا.',fieldId:id});
-    if(['select','multiselect'].includes(f.fieldType??f.field_type) && !(f.options??[]).length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
+    if(['select','multiselect'].includes(f.fieldType??f.field_type)){
+      const options=(f.options??[]).map((x:any)=>String(x).trim());
+      if(!options.length) out.errors.push({code:'OPTIONS',message:'أضف خيارات العنصر.',fieldId:id});
+      if(options.some((x:string)=>!x)) out.errors.push({code:'EMPTY_OPTION',message:'لا يمكن أن يحتوي العنصر على خيار فارغ.',fieldId:id});
+      if(new Set(options.map((x:string)=>x.toLocaleLowerCase())).size!==options.length) out.errors.push({code:'DUPLICATE_OPTION',message:'يوجد خيار مكرر في العنصر.',fieldId:id});
+    }
+    if(f.config?.displayOnly && !(f.config?.staticText||'').trim()) out.errors.push({code:'DISPLAY_TEXT',message:'نص العرض فقط يحتاج إلى محتوى.',fieldId:id});
   });
   const stageIndex=new Map(stages.map((s:any,i:number)=>[s.id,i]));
   // Delegation is an optional stage capability. It is intentionally not coupled to any required field.
+  data.stages.forEach((s:any)=>{
+    const cfg=s.config??(s.config_json?safeJson(s.config_json,{}):{});
+    if(cfg?.delegate?.enabled){
+      const employeeFieldId=cfg.delegate?.employeeFieldId;
+      if(!employeeFieldId) out.errors.push({code:'DELEGATION_TARGET',message:'التمرير لموظف آخر مفعّل لكن لم يتم تحديد عنصر اختيار موظف.',stageId:s.id});
+      else {
+        const f=fieldById.get(employeeFieldId);
+        if(!f || (f.fieldType??f.field_type)!=='employee') out.errors.push({code:'DELEGATION_FIELD',message:'عنصر التمرير يجب أن يكون من نوع اختيار موظف.',stageId:s.id,fieldId:employeeFieldId});
+      }
+    }
+  });
   data.transitions.forEach((t:any)=>{
     const from=t.fromStageId??t.from_stage_id;
     const to=t.toStageId??t.to_stage_id??null;
@@ -216,8 +233,11 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
         const sid=source.stageId??source.stage_id??null;
         if(sid && (stageIndex.get(sid)??0)>(stageIndex.get(from)??0)) out.errors.push({code:'CONDITION_FUTURE',message:'لا يمكن أن يعتمد الشرط على عنصر من مرحلة لم تُنفذ بعد.',transitionId:t.id});
       }
-      if(['is_true','is_false','is_empty','is_not_empty'].includes(t.condition.operator) && (t.condition.values||[]).length) out.warnings.push({code:'CONDITION_VALUE_IGNORED',message:'هذا النوع من الشروط لا يحتاج قيمة؛ سيعتمد القرار على حالة الحقل فقط.',transitionId:t.id});
-      if(!['is_true','is_false','is_empty','is_not_empty'].includes(t.condition.operator) && !(t.condition.values||[]).length) out.errors.push({code:'CONDITION_VALUE',message:'حدد القيمة التي سيقارن بها الشرط.',transitionId:t.id});
+      const noValueOperators=['is_true','is_false','is_empty','is_not_empty'];
+      const numericOperators=['greater_than','greater_or_equal','less_than','less_or_equal'];
+      if(noValueOperators.includes(t.condition.operator) && (t.condition.values||[]).length) out.warnings.push({code:'CONDITION_VALUE_IGNORED',message:'هذا النوع من الشروط لا يحتاج قيمة؛ سيعتمد القرار على حالة الحقل فقط.',transitionId:t.id});
+      if(!noValueOperators.includes(t.condition.operator) && !(t.condition.values||[]).length) out.errors.push({code:'CONDITION_VALUE',message:'حدد القيمة التي سيقارن بها الشرط.',transitionId:t.id});
+      if(numericOperators.includes(t.condition.operator) && source && !['number'].includes(source.fieldType??source.field_type)) out.errors.push({code:'CONDITION_NUMERIC',message:'المقارنة الرقمية متاحة لعناصر الأرقام فقط.',transitionId:t.id});
     }
   });
   if(out.errors.length) out.valid=false;
@@ -267,6 +287,10 @@ app.get('/admin/catalog', async c=>{
     ['transport_allowance','بدل النقل','salary','number',true,'آخر بدل نقل فعّال.','employee.view_salary'],
     ['other_allowances','بدلات أخرى','salary','number',true,'إجمالي البدلات الأخرى في سجل الراتب.','employee.view_salary'],
     ['gosi_number','رقم التأمينات','statutory','text',true,'رقم التأمينات المسجل.','employee.view_gosi'],
+    ['insurance_number','رقم التأمين','statutory','text',true,'رقم التأمين المسجل للموظف.','employee.view_gosi'],
+    ['insurance_provider','شركة التأمين','statutory','text',true,'شركة التأمين الحالية.','employee.view_gosi'],
+    ['insurance_class','فئة التأمين','statutory','text',true,'فئة التأمين الحالية.','employee.view_gosi'],
+    ['professional_hazard','خطر مهني','statutory','boolean',true,'حالة الخطر المهني من الملف النظامي.','employee.view_gosi'],
     ['residency_classification','تصنيف الإقامة','statutory','text',true,'تصنيف الإقامة المسجل.','employee.view_identity']
   ].map(([sourceKey,labelAr,group,type,sensitive,description,permission])=>({sourceKey,labelAr,group,type,sensitive,description,permission}));
   return c.json({systemFields,roles:roles.results.map((r:any)=>({code:r.code,nameAr:r.name_ar})),permissions:permissions.results});
@@ -281,6 +305,32 @@ app.get('/admin/types', async c=>{
     FROM transaction_types tt WHERE tt.company_id IS NULL ORDER BY tt.updated_at DESC,tt.name_ar
   `).all<any>();
   return c.json({items:rows.results});
+});
+
+app.post('/admin/types/:id/copy', async c=>{
+  await ensurePhase6AuxTables(c);
+  const source=await loadWorkflow(c,c.req.param('id'));
+  if(!source)return errorResponse(c,'WORKFLOW-003',404);
+  const typeId=crypto.randomUUID(), workflowId=crypto.randomUUID(), actor=actorId(c);
+  try{
+    const statements:D1PreparedStatement[]=[
+      c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'inactive',?,?)`)
+        .bind(typeId,null,`${source.workflow.name_ar} — نسخة`,source.workflow.description??null,JSON.stringify(source.workflow.allowed_submitters||['self']),actor,actor),
+      c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`)
+        .bind(workflowId,typeId,1,source.workflow.description??null,JSON.stringify(source.workflow.allowed_submitters||['self']),actor,actor),
+      c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,?,?)`)
+        .bind(crypto.randomUUID(),workflowId,source.requestSettings.targetEmployeeEnabled?1:0,source.requestSettings.targetEmployeeRequired?1:0)
+    ];
+    const stageMap=new Map<string,string>();
+    for(const s of source.stages){ const id=crypto.randomUUID(); stageMap.set(s.id,id); statements.push(c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId,s.name_ar,s.name_en??null,s.stage_order,s.responsible_type,s.responsible_value??null,s.duration_minutes??null,s.config_json??JSON.stringify(s.config||{}))); }
+    const fieldMap=new Map<string,string>();
+    for(const f of source.fields){ const id=crypto.randomUUID(); fieldMap.set(f.id,id); statements.push(c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId, f.stage_id?stageMap.get(f.stage_id)||null:null, f.field_key, f.label_ar,f.label_en??null,f.field_type,f.required,f.options_json??'[]',f.config_json??'{}',f.sort_order)); }
+    for(const t of source.transitions){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.from_stage_id),t.to_stage_id?stageMap.get(t.to_stage_id)||null:null,t.action,t.label_ar,t.condition_json?JSON.stringify({...safeJson(t.condition_json,null),fieldId:fieldMap.get(safeJson(t.condition_json,null)?.fieldId)||safeJson(t.condition_json,null)?.fieldId}):null,t.sort_order,t.active)); }
+    for(const f of source.systemFields){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.source_key,f.label_ar,f.sort_order)); }
+    await c.env.DB.batch(statements);
+    await audit(c,'workflow_template_copied','workflow',workflowId,{sourceWorkflowId:source.workflow.id});
+  }catch(e){return workflowDbError(c,e);}
+  return c.json({ok:true,id:typeId,workflowId},201);
 });
 
 app.post('/admin/types', async c=>{
@@ -488,59 +538,6 @@ app.post('/admin/workflows/:id/deactivate', async c=>{
 
 /* Isolated test environment: it only reads a draft and returns its definition.
    It never inserts employees, users, transactions, answers or history into D1. */
-app.post('/admin/transactions/cleanup', async c=>{
-  /* Super Admin only. Full Phase 6 reset. It is intentionally resilient to
-     partially applied Phase 6 migrations: missing Phase-6 tables are skipped,
-     while Phase 1-5 tables are never referenced. */
-  const tables=[
-    'transaction_attachments',
-    'transaction_feedback',
-    'transaction_actions',
-    'transaction_answers',
-    'transaction_stage_executions',
-    'transactions',
-    'transaction_sequences',
-    'workflow_transitions',
-    'workflow_conditions',
-    'workflow_questions_v2',
-    'workflow_questions',
-    'workflow_system_fields',
-    'workflow_request_settings',
-    'workflow_fields',
-    'workflow_stages',
-    'workflow_definitions',
-    'transaction_type_companies',
-    'transaction_types'
-  ];
-  try{
-    const existingTables=(await Promise.all(tables.map(async table=>[table,await tableExists(c,table)] as const)))
-      .filter((x):x is readonly [string,true]=>x[1]);
-    const existing=existingTables.map(x=>x[0]);
-    const counts=await Promise.all(existing.map(async table=>{
-      const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<any>();
-      return [table,Number(row?.count||0)] as const;
-    }));
-    const cleanupStatements: D1PreparedStatement[]=[];
-    if(existing.length){
-      cleanupStatements.push(...existing.map(table=>c.env.DB.prepare(`DELETE FROM ${table}`)));
-    }
-    if(await tableExists(c,'audit_logs')){
-      cleanupStatements.push(c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource IN ('workflow','workflow_engine','transaction') OR action LIKE 'workflow_%' OR action LIKE 'transaction_%'`));
-    }
-    if(cleanupStatements.length){
-      await c.env.DB.batch(cleanupStatements);
-    }
-    return c.json({
-      ok:true,
-      reset:true,
-      message:'تم تصفير جميع بيانات Phase 6 الخاصة بالمعاملات وسير العمل. الاستوديو جاهز للبدء من الصفر.',
-      deleted:Object.fromEntries(counts)
-    });
-  }catch(e){
-    return errorResponse(c,'PHASE6-RESET-001',500,e);
-  }
-});
-
 app.get('/test/templates', async c=>{
   const rows=await c.env.DB.prepare(`
     SELECT tt.id,tt.name_ar,tt.status,

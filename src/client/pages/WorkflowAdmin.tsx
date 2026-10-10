@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { downloadWorkflowMapPdf } from '../lib/workflowPdf';
 import { ErrorState, LoadingState } from '../components/State';
 
 type SystemField = {
@@ -209,13 +210,22 @@ export function WorkflowAdmin() {
   }
   useEffect(() => { if (typeId && typeId !== 'new') void open(typeId); }, [typeId]);
 
-  async function cleanupTransactions() {
-    const ok = window.confirm('سيتم تصفير كل بيانات Phase 6: القوالب، الإصدارات، المراحل، العناصر، الشروط، المسارات، المعاملات، التنفيذ، المرفقات، الأرقام والسجل التدقيقي الخاص بـPhase 6. لن تُمس أي بيانات من Phase 1–5. هل تريد المتابعة؟');
-    if (!ok) return;
-    setLoading(true); setError(''); setNotice('');
-    try { await api('/api/workflows/admin/transactions/cleanup', { method: 'POST' }); setNotice('تم تصفير بيانات Phase 6 بالكامل. الاستوديو جاهز للبدء من الصفر.'); await loadList(); }
-    catch (e) { setError(errorText(e, 'تعذر تصفير بيانات Phase 6.')); }
-    finally { setLoading(false); }
+  async function deactivateTemplate(id:string) {
+    if(!window.confirm('سيتم تعطيل الإصدار المعتمد لهذا القالب دون حذف بياناته. هل تريد المتابعة؟')) return;
+    setSaving(true); setError('');
+    try {
+      await api(`/api/workflows/admin/workflows/${id}/deactivate`,{method:'POST'});
+      await loadList();
+    } catch(e){ setError(errorText(e,'تعذر تعطيل القالب.')); }
+    finally{setSaving(false);}
+  }
+  async function copyTemplate(id:string) {
+    setSaving(true); setError('');
+    try {
+      const r=await api<any>(`/api/workflows/admin/types/${id}/copy`,{method:'POST'});
+      nav(`/workflow-studio/${r.id}`,{replace:true});
+    } catch(e){ setError(errorText(e,'تعذر نسخ القالب.')); }
+    finally{setSaving(false);}
   }
   async function createNew(nameValue: string, descriptionValue: string, allowed: string[]) {
     setSaving(true); setError('');
@@ -284,13 +294,19 @@ export function WorkflowAdmin() {
       if (!f.labelAr.trim()) errs.push({ code: 'FIELD', message: 'كل عنصر يحتاج اسمًا واضحًا.', fieldId: f.id, stageId: f.stageId });
       if (keys.has(f.fieldKey)) errs.push({ code: 'KEY', message: `العنصر «${f.labelAr || 'بدون اسم'}» يحمل مفتاحًا مكررًا.`, fieldId: f.id, stageId: f.stageId });
       keys.add(f.fieldKey);
-      if (f.fieldType === 'select' && !f.options.length) errs.push({ code: 'OPTIONS', message: `أضف خيارات لـ«${f.labelAr || 'العنصر'}».`, fieldId: f.id, stageId: f.stageId });
+      if (['select','multiselect'].includes(f.fieldType)) {
+        if (!f.options.length) errs.push({ code: 'OPTIONS', message: `أضف خيارات لـ«${f.labelAr || 'العنصر'}».`, fieldId: f.id, stageId: f.stageId });
+        if (f.options.some(x=>!x.trim())) errs.push({ code: 'EMPTY_OPTION', message: `يوجد خيار فارغ في «${f.labelAr || 'العنصر'}».`, fieldId: f.id, stageId: f.stageId });
+        if (new Set(f.options.map(x=>x.trim().toLocaleLowerCase())).size !== f.options.length) errs.push({ code: 'DUPLICATE_OPTION', message: `يوجد خيار مكرر في «${f.labelAr || 'العنصر'}».`, fieldId: f.id, stageId: f.stageId });
+      }
+      if (f.displayOnly && !f.staticText.trim()) errs.push({ code: 'DISPLAY_TEXT', message: `أدخل النص الذي سيظهر للمستخدم في «${f.labelAr || 'النص'}».`, fieldId: f.id, stageId: f.stageId });
       if (f.required && f.displayOnly) errs.push({ code: 'READONLY', message: `«${f.labelAr || 'العنصر'}» لا يمكن أن يكون مطلوبًا وعرض فقط معًا.`, fieldId: f.id, stageId: f.stageId });
     });
     stages.forEach(s => {
       if (!s.nameAr.trim()) errs.push({ code: 'STAGE_NAME', message: 'اسم المرحلة مطلوب.', stageId: s.id });
       if (['role', 'permission'].includes(s.responsibleType) && !s.responsibleValue.trim()) errs.push({ code: 'RESPONSIBLE_VALUE', message: `حدد ${responsibility[s.responsibleType]} لـ«${s.nameAr || 'المرحلة'}».`, stageId: s.id });
-      // Delegation is an optional stage capability; it never makes an employee field required.
+      if (s.delegateEnabled && (!s.delegateFieldId || !fields.some(f=>f.id===s.delegateFieldId && f.stageId===s.id && f.fieldType==='employee' && !f.displayOnly))) errs.push({ code: 'DELEGATION_TARGET', message: `حدد عنصر اختيار موظف صالحًا للتمرير في «${s.nameAr || 'المرحلة'}».`, stageId: s.id });
+
     });
     setValidation({ valid: !errs.length, errors: errs, warnings: [] });
     if (errs[0]) { setError(errs[0].message); if (errs[0].fieldId) requestAnimationFrame(() => document.getElementById(`wf-field-${errs[0].fieldId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); else if (errs[0].stageId) scrollTo(errs[0].stageId); }
@@ -327,6 +343,28 @@ export function WorkflowAdmin() {
       if (details.length) setValidation({ valid: false, errors: details.map(d => ({ message: pathLabel(d), stageId: d.path?.includes('stages') ? stages[0]?.id : undefined })), warnings: [] });
     } finally { setSaving(false); }
   }
+  async function downloadMap() {
+    if (!workflow) return;
+    const model = {
+      name: name || type?.name_ar || 'سير العمل',
+      description,
+      stages: stages.map(st => ({
+        name: st.nameAr,
+        responsible: responsibility[st.responsibleType] || 'المسؤول المحدد',
+        duration: st.durationMinutes,
+        fields: fields.filter(f=>f.stageId===st.id).map(f=>f.labelAr)
+      })),
+      routes: routes.map(r => {
+        const from=stages.find(x=>x.id===r.fromStageId)?.nameAr || 'مرحلة';
+        const target=stages.find(x=>x.id===r.toStageId)?.nameAr || '';
+        const source=fields.find(f=>f.id===r.condition?.fieldId)?.labelAr;
+        const condition=source && r.condition ? `${source} ${r.condition.operator} ${(r.condition.values||[]).join('، ')}` : null;
+        return {from,label:r.labelAr,action:actions[r.action]||r.action,target:target||actions[r.action]||'',condition};
+      })
+    };
+    await downloadWorkflowMapPdf(model);
+  }
+
   async function publish() {
     if (!workflow || saving) return;
     if (!localValidation()) return;
@@ -340,7 +378,7 @@ export function WorkflowAdmin() {
   }
 
   // Creation entrypoint uses SPA navigation so the shell/session is not reloaded.
-  if (!typeId) return <TemplateList templates={templates} loading={loading} error={error} onOpen={(id) => nav(`/workflow-studio/${id}`)} onCleanup={cleanupTransactions} onCreate={() => nav('/workflow-studio/new')} />;
+  if (!typeId) return <TemplateList templates={templates} loading={loading} error={error} onOpen={(id) => nav(`/workflow-studio/${id}`)} onCopy={copyTemplate} onDeactivate={deactivateTemplate} onCreate={() => nav('/workflow-studio/new')} />;
   if (typeId === 'new') return <CreateTemplatePage saving={saving} error={error} onCancel={() => nav('/workflow-studio')} onCreate={createNew} />;
   if (loading && !type) return <LoadingState />;
   if (!type || !workflow) return <ErrorState />;
@@ -356,7 +394,7 @@ export function WorkflowAdmin() {
         <div className="wf-crumb"><button onClick={() => nav('/workflow-studio')}>استوديو سير العمل</button><ChevronLeft size={14} /><span>تصميم القالب</span></div>
         <div className="wf-hero-title-row"><span className="wf-hero-symbol"><WorkflowIcon size={28} /></span><div><div className="wf-kicker">WORKFLOW STUDIO</div><h1>{name || type.name_ar}</h1><p>{description || 'صمّم المعاملة مرة واحدة، ودع المحرك يدير البيانات والمراحل والمسارات.'}</p></div></div>
       </div>
-      <div className="wf-hero-actions"><span className={`wf-status ${workflow.status === 'active' ? 'active' : 'draft'}`}><span />{workflow.status === 'active' ? 'معتمد' : 'مسودة'}</span><Link className="wf-ghost" to={`/workflow-studio/preview/${type.id}`}><Eye size={16} />المعاينة</Link><Link className="wf-ghost" to={`/workflow-studio/test/${type.id}?workflowId=${encodeURIComponent(workflow.id)}`}><CheckCircle2 size={16} />اختبار A–Z</Link></div>
+      <div className="wf-hero-actions"><span className={`wf-status ${workflow.status === 'active' ? 'active' : 'draft'}`}><span />{workflow.status === 'active' ? 'معتمد' : 'مسودة'}</span><button type="button" className="wf-ghost" onClick={()=>void downloadMap()}><FileText size={16}/>خارطة المعاملة PDF</button><Link className="wf-ghost" to={`/workflow-studio/preview/${type.id}`}><Eye size={16} />المعاينة</Link><Link className="wf-ghost" to={`/workflow-studio/test/${type.id}?workflowId=${encodeURIComponent(workflow.id)}`}><CheckCircle2 size={16} />اختبار A–Z</Link></div>
     </section>
 
     {error && <div className="wf-alert-v2 danger"><CircleAlert size={19} /><div><strong>لم يتم حفظ التغيير</strong><span>{error}</span></div><button onClick={() => setError('')}><X size={16} /></button></div>}
@@ -367,7 +405,7 @@ export function WorkflowAdmin() {
       <button onClick={() => document.getElementById('wf-system-data')?.scrollIntoView({behavior:'smooth'})}><span>02</span>بيانات النظام</button>
       <button onClick={() => document.getElementById('wf-request-data')?.scrollIntoView({behavior:'smooth'})}><span>03</span>أسئلة الطلب</button>
       <button onClick={() => document.getElementById('wf-stages')?.scrollIntoView({behavior:'smooth'})}><span>04</span>المراحل والمسار</button>
-      <button onClick={() => document.getElementById('wf-quality')?.scrollIntoView({behavior:'smooth'})}><span>05</span>بوابة الجودة</button>
+      <button onClick={() => document.getElementById('wf-conditions')?.scrollIntoView({behavior:'smooth'})}><span>05</span>الشروط والمسارات</button><button onClick={() => document.getElementById('wf-quality')?.scrollIntoView({behavior:'smooth'})}><span>06</span>بوابة الجودة</button>
     </div>
 
     <div className="wf-main-grid">
@@ -405,15 +443,28 @@ export function WorkflowAdmin() {
             return <article key={s.id} ref={el => {stageRefs.current[s.id]=el}} className={`wf-stage-card ${selectedStage===s.id?'focus':''}`} onFocus={() => setSelectedStage(s.id)}>
               <div className="wf-stage-top"><div className="wf-stage-heading"><span className="wf-stage-number">{i+1}</span><div><span className="wf-stage-kicker">STAGE {String(i+1).padStart(2,'0')}</span><input value={s.nameAr} className="wf-stage-name-input" onChange={e => setStages(stages.map(x => x.id===s.id?{...x,nameAr:e.target.value}:x))} placeholder="اسم المرحلة" /></div></div><div className="wf-stage-actions"><button className="wf-icon-action" title="نقل لأعلى" disabled={i===0} onClick={()=>moveStage(i,-1)}><ArrowUp size={15}/></button><button className="wf-icon-action" title="نقل لأسفل" disabled={i===stages.length-1} onClick={()=>moveStage(i,1)}><ArrowDown size={15}/></button><button className="wf-icon-action danger" title="حذف المرحلة" disabled={stages.length===1} onClick={()=>removeStage(s.id)}><Trash2 size={15}/></button></div></div>
               <div className="wf-stage-meta-grid"><label className="wf-input-group"><span>مسؤول المرحلة</span><div className="wf-select-with-icon"><ResponsibilityIcon size={15}/><select value={s.responsibleType} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleType:e.target.value,responsibleValue:''}:x))}>{Object.entries(responsibility).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div></label>{s.responsibleType==='role'&&<label className="wf-input-group"><span>الدور</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الدور</option>{(catalog?.roles||[]).map(r=><option key={r.code} value={r.code}>{r.nameAr}</option>)}</select></label>}{s.responsibleType==='permission'&&<label className="wf-input-group"><span>الصلاحية</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الصلاحية</option>{(catalog?.permissions||[]).map(p=><option key={p.id} value={p.id}>{p.nameAr}</option>)}</select></label>}<label className="wf-input-group"><span>مدة المرحلة <em>اختياري</em></span><div className="wf-input-icon"><Clock3 size={15}/><input type="number" min="1" value={s.durationMinutes??''} placeholder="بدون حد" onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,durationMinutes:e.target.value?Number(e.target.value):null}:x))}/></div></label></div>
-              <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>التمرير لموظف آخر</strong><span className="wf-optional-badge">اختياري</span></div><p>يمكن للمسؤول، أثناء معالجة المرحلة، أن يختار «تمرير لموظف آخر» عند الحاجة. إذا لم يختره تستمر المعاملة بشكل طبيعي. بعد إكمال المهمة تعود تلقائيًا إلى هذه المرحلة.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:''}:x))}/><span className="wf-toggle"><i /></span><b>{s.delegateEnabled?'السماح بالتمرير لموظف آخر':'لا تسمح بالتمرير لموظف آخر'}</b></label>{s.delegateEnabled&&<div className="wf-delegation-note"><CheckCircle2 size={14}/> يظهر خيار التمرير فقط عند الحاجة ولا يجعل أي عنصر في المرحلة إلزاميًا.</div>}</div></div>
+              <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>التمرير لموظف آخر</strong><span className="wf-optional-badge">اختياري</span></div><p>يمكن للمسؤول، أثناء معالجة المرحلة، أن يختار «تمرير لموظف آخر» عند الحاجة. إذا لم يختره تستمر المعاملة بشكل طبيعي. بعد إكمال المهمة تعود تلقائيًا إلى هذه المرحلة.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:''}:x))}/><span className="wf-toggle"><i /></span><b>{s.delegateEnabled?'السماح بالتمرير لموظف آخر':'لا تسمح بالتمرير لموظف آخر'}</b></label>{s.delegateEnabled&&<><label className="wf-input-group"><span>عنصر اختيار الموظف للتمرير</span><select value={s.delegateFieldId} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateFieldId:e.target.value}:x))}><option value="">اختر عنصر موظف</option>{stageFields.filter(f=>f.fieldType==='employee'&&!f.displayOnly).map(f=><option key={f.id} value={f.id}>{f.labelAr}</option>)}</select></label><div className="wf-delegation-note"><CheckCircle2 size={14}/> عند إكمال الموظف المفوَّض مهمته تعود المعاملة إلى هذه المرحلة الأصلية.</div></>}</div></div>
               <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة والحقول يمكن استخدامها كقرارات عند الحاجة، والنصوص للعرض فقط.</span></div><div className="wf-title-actions"><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button><button className="wf-secondary-action small" onClick={()=>addField(s.id,true)}><FileText size={13}/>إضافة نص</button></div></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
-              <div className="wf-route-block"><div className="wf-route-head"><div><strong>المسار</strong><span>{i===stages.length-1?'الإكمال هو المسار الافتراضي. ويمكن للفرع المشروط إعادة المعاملة إلى مرحلة سابقة أو إنهاؤها وفق القرار.':'المسار الافتراضي تلقائي إلى المرحلة التالية. أضف فرعًا مشروطًا فقط عندما تريد تغيير هذا المسار.'}</span></div><button className="wf-secondary-action small" onClick={()=>addRoute(s.id)}><GitBranch size={14}/>إضافة فرع مشروط</button></div><div className="wf-condition-principle"><GitBranch size={15}/><span><b>فلسفة الشرط:</b> يختبر المحرك الشروط أولًا بالترتيب. إذا تحقق شرط ينتقل حسب المسار الذي صممته. إذا لم يتحقق أي شرط، يعود للمسار الافتراضي تلقائيًا — للمرحلة التالية، أو للإكمال إذا كانت هذه آخر مرحلة.</span></div><RouteEditor stage={s} stages={stages} fields={fields} routes={stageRoutes} onChange={r=>setRoutes(routes.map(x=>x.id===r.id?r:x))} onAdd={()=>addRoute(s.id)} onRemove={id=>setRoutes(routes.filter(x=>x.id!==id))} />{i===stages.length-1&&<div className="wf-complete-note"><CheckCircle2 size={17}/><span><b>نهاية منطقية للمسار</b> — هذه آخر مرحلة فعلية باسمها الحالي. بدون شرط مطابق تكتمل المعاملة، ومع شرط مطابق يمكن إرجاعها لمرحلة سابقة.</span></div>}</div>
+              <div className="wf-route-summary"><GitBranch size={15}/><span>{stageRoutes.length ? `${stageRoutes.length} فروع/شروط معرفة لهذه المرحلة — تُدار جميعها من قسم «الشروط والمسارات».` : (i===stages.length-1 ? 'بدون شرط مطابق، تكتمل المعاملة بعد نجاح هذه المرحلة.' : 'بدون شرط مطابق، ينتقل المحرك تلقائيًا إلى المرحلة التالية.')}</span></div>{i===stages.length-1&&<div className="wf-complete-note"><CheckCircle2 size={17}/><span><b>نهاية منطقية للمسار</b> — هذه آخر مرحلة فعلية باسمها الحالي. لا توجد مرحلة إضافية مخفية.</span></div>}
             </article>;
           })}</div>
         </section>
 
+        <section id="wf-conditions" className="wf-card wf-section-card">
+          <SectionTitle number="05" eyebrow="الشروط والمسارات" title="منطق الانتقال" subtitle="هذا القسم مستقل عن إعداد المراحل. المسار الطبيعي تلقائي، ولا تحتاج إلى إنشاء Route إلا عندما تريد فرعًا أو إرجاعًا أو قرارًا خاصًا." action={<button className="wf-primary-action" onClick={()=>addRoute(stages[0]?.id || '')} disabled={!stages.length}><Plus size={16}/>إضافة شرط</button>} />
+          <div className="wf-condition-principle global"><GitBranch size={16}/><span><b>قاعدة المحرك:</b> يفحص الشروط بالترتيب. عند تحقق شرط ينفذ وجهته؛ وإذا لم يتحقق أي شرط يستخدم المسار الطبيعي للمرحلة التالية، وفي آخر مرحلة يكتمل الطلب.</span></div>
+          {routes.length ? routes.map(r=>{
+            const fromStage=stages.find(st=>st.id===r.fromStageId);
+            if(!fromStage) return null;
+            return <div className="wf-global-route" key={r.id}>
+              <div className="wf-global-route-head"><span className="wf-status-pill"><span/>من {fromStage.nameAr}</span><button type="button" className="wf-icon-action" title="حذف الشرط" onClick={()=>setRoutes(routes.filter(x=>x.id!==r.id))}><Trash2 size={15}/></button></div>
+              <RouteEditor stage={fromStage} stages={stages} fields={fields} routes={[r]} onChange={next=>setRoutes(routes.map(x=>x.id===next.id?next:x))} onAdd={()=>addRoute(fromStage.id)} onRemove={id=>setRoutes(routes.filter(x=>x.id!==id))} />
+            </div>;
+          }) : <div className="wf-quality-empty"><GitBranch size={24}/><strong>لا توجد شروط مخصصة</strong><span>المحرك يستخدم التسلسل الطبيعي تلقائيًا.</span></div>}
+        </section>
+
         <section id="wf-quality" className="wf-card wf-quality-card">
-          <SectionTitle number="05" eyebrow="Quality Gate" title="بوابة جودة القالب" subtitle="أي خطأ يمنع الاعتماد، وكل مشكلة مرتبطة بمكان واضح داخل التصميم." action={<button className="wf-secondary-action" onClick={()=>void save(true)}><ShieldCheck size={16}/>فحص الآن</button>} />
+          <SectionTitle number="06" eyebrow="Quality Gate" title="بوابة جودة القالب" subtitle="أي خطأ يمنع الاعتماد، وكل مشكلة مرتبطة بمكان واضح داخل التصميم." action={<button className="wf-secondary-action" onClick={()=>void save(true)}><ShieldCheck size={16}/>فحص الآن</button>} />
           {!validation?<div className="wf-quality-empty"><ShieldCheck size={25}/><strong>جاهز للفحص</strong><span>شغّل الفحص قبل الاعتماد للتأكد من المسؤوليات والعناصر والمسارات.</span></div>:<ValidationPanel validation={validation} stages={stages} onJump={scrollTo} />}
         </section>
       </main>
@@ -474,7 +525,7 @@ function FieldEditor({fields,onUpdate,onRemove}:{fields:Field[];onUpdate:(id:str
           </select></label>
         </div>
         {isStatic&&<label className="wf-input-group"><span>النص المعروض</span><textarea rows={3} value={f.staticText} onChange={e=>onUpdate(f.id,{staticText:e.target.value})} placeholder="اكتب التعليمات أو التنبيه الذي سيظهر كما هو للمستخدم." /></label>}
-        {showOptions&&!isStatic&&<label className="wf-input-group"><span>الخيارات</span><input value={f.options.join('، ')} onChange={e=>onUpdate(f.id,{options:e.target.value.split(/[,،\n]/).map(x=>x.trim()).filter(Boolean)})} placeholder="مثال: نعم، لا" /></label>}
+        {showOptions&&!isStatic&&<div className="wf-options-editor"><div className="wf-options-head"><span>الخيارات</span><button type="button" className="wf-link-button" onClick={()=>onUpdate(f.id,{options:[...(f.options||[]),'']})}><Plus size={13}/>إضافة خيار</button></div>{(f.options||[]).map((option,index)=><div className="wf-option-row" key={`${f.id}-option-${index}`}><span>{index+1}</span><input value={option} onChange={e=>{const next=[...(f.options||[])];next[index]=e.target.value;onUpdate(f.id,{options:next});}} placeholder={`الخيار ${index+1}`}/><button type="button" className="wf-icon-action" title="حذف الخيار" onClick={()=>onUpdate(f.id,{options:(f.options||[]).filter((_,i)=>i!==index)})}><Trash2 size={14}/></button></div>)}{!(f.options||[]).length&&<div className="wf-options-empty">أضف خيارًا واحدًا على الأقل. لا تستخدم خيار1، خيار2 بشكل تلقائي.</div>}</div>}
         <div className="wf-field-help"><span>{typeHelp}</span>{!isStatic&&<><label className="wf-check-toggle"><input type="checkbox" checked={f.required} onChange={e=>onUpdate(f.id,{required:e.target.checked,displayOnly:e.target.checked?false:f.displayOnly})}/><span/>مطلوب</label></>}<label className="wf-check-toggle"><input type="checkbox" checked={isStatic} onChange={e=>{const on=e.target.checked;onUpdate(f.id,{displayOnly:on,required:on?false:f.required,staticText:on?(f.staticText||'اكتب النص الذي سيظهر للمستخدم.'):''})}}/><span/>عرض فقط</label></div>
       </div>
       <button type="button" className="wf-delete-field" title="حذف العنصر" onClick={()=>onRemove(f.id)}><Trash2 size={16}/></button>
@@ -494,6 +545,7 @@ function RouteEditor({stage,stages,fields,routes,onChange,onAdd,onRemove}:{stage
   if(!routes.length) return <div className="wf-route-default"><div className="wf-route-default-icon"><GitBranch size={17}/></div><div><strong>المسار الافتراضي جاهز</strong><span>{index<stages.length-1?'يمرر المحرك الطلب تلقائيًا إلى المرحلة التالية.':'يكمل المحرك المعاملة تلقائيًا بعد نجاح هذه المرحلة.'}</span></div></div>;
   const operatorOptions=(field?:Field)=>{
     if(field?.fieldType==='boolean') return [['equals','يساوي'],['not_equals','لا يساوي'],['is_true','نعم'],['is_false','لا'],['is_empty','فارغ'],['is_not_empty','معبأ']];
+    if(field?.fieldType==='number') return [['equals','يساوي'],['not_equals','لا يساوي'],['greater_than','أكبر من'],['greater_or_equal','أكبر من أو يساوي'],['less_than','أقل من'],['less_or_equal','أقل من أو يساوي'],['is_empty','فارغ'],['is_not_empty','معبأ']];
     if(['employee','organization_unit','position','user'].includes(field?.fieldType||'')) return [['is_empty','فارغ'],['is_not_empty','معبأ']];
     return [['equals','يساوي'],['not_equals','لا يساوي'],['contains','يحتوي'],['in','ضمن القائمة'],['is_empty','فارغ'],['is_not_empty','معبأ']];
   };
@@ -530,7 +582,7 @@ function ValidationPanel({validation,stages,onJump}:{validation:any;stages:Stage
   return <div className="wf-validation-body"><div className={`wf-validation-summary ${validation.valid?'good':'bad'}`}><span>{validation.valid?<CheckCircle2 size={20}/>:<CircleAlert size={20}/>}</span><div><strong>{validation.valid?'جاهز للاعتماد مع تحذيرات':'هناك أخطاء تمنع الاعتماد'}</strong><small>{errors.length?`${errors.length} أخطاء تحتاج إلى إصلاح.`:`${warnings.length} تحذيرات للمراجعة.`}</small></div></div><div className="wf-validation-list">{errors.map((v:any,i:number)=><button key={`e-${i}`} onClick={()=>v.stageId&&onJump(v.stageId)} className="wf-validation-row error"><CircleAlert size={15}/><span>{v.message}</span><ChevronLeft size={14}/></button>)}{warnings.map((v:any,i:number)=><div key={`w-${i}`} className="wf-validation-row warning"><Clock3 size={15}/><span>{v.message}</span></div>)}</div></div>;
 }
 function Stat({value,label,icon:Icon}:{value:string;label:string;icon:any}) { return <div className="wf-stat"><span><Icon size={15}/></span><strong>{value}</strong><small>{label}</small></div>; }
-function previewSystemValue(key:string) { const map:Record<string,string>={employee_number:'رقم الموظف عند التشغيل',full_name:'اسم الموظف عند التشغيل',national_id:'حسب الصلاحية',job_title:'المسمى الوظيفي من الملف',organization_unit:'الوحدة التنظيمية من Phase 4',position:'المنصب من Phase 4',direct_manager:'المدير المباشر من Phase 4',actual_start_date:'تاريخ المباشرة من الملف',join_date:'تاريخ التعيين من الملف',basic_salary:'حسب صلاحية الراتب',housing_allowance:'حسب صلاحية الراتب',transport_allowance:'حسب صلاحية الراتب',other_allowances:'حسب صلاحية الراتب',nationality:'الجنسية من الملف',work_location:'موقع العمل من الملف',contract_type:'نوع العقد من الملف'}; return map[key]||'قيمة من بيانات الموظف عند التشغيل'; }
+function previewSystemValue(key:string) { return key==='employee_number' ? 'رقم الموظف عند التشغيل' : 'تُستدعى القيمة الفعلية من Phase 5 عند التشغيل'; }
 
 function CreateTemplatePage({saving,error,onCancel,onCreate}:{saving:boolean;error:string;onCancel:()=>void;onCreate:(name:string,description:string,allowed:string[])=>Promise<void>|void}) {
   const [name,setName]=useState('');
@@ -548,7 +600,7 @@ function CreateTemplatePage({saving,error,onCancel,onCreate}:{saving:boolean;err
   return <div className="workflow-studio premium-studio wow-studio"><section className="wf-hero compact"><div className="wf-hero-copy"><div className="wf-crumb"><button type="button" onClick={onCancel}>استوديو سير العمل</button><ChevronLeft size={14}/><span>قالب جديد</span></div><div className="wf-hero-title-row"><span className="wf-hero-symbol"><FileText size={28}/></span><div><div className="wf-kicker">NEW WORKFLOW</div><h1>إنشاء قالب معاملة</h1><p>ابدأ باسم واضح، وصف مختصر، وحدد من يملك حق تقديم هذا النوع.</p></div></div></div><span className="wf-status draft"><span/>مسودة جديدة</span></section>{(error||localError)&&<div className="wf-alert-v2 danger"><CircleAlert size={19}/><div><strong>تعذر إنشاء القالب</strong><span>{localError||error}</span></div></div>}<form className="wf-card wf-create-card" onSubmit={submit} noValidate><div className="wf-create-heading"><span>01</span><div><span className="wf-kicker soft">BASIC SETUP</span><h2>بيانات القالب الأساسية</h2><p>بعد الحفظ سيُنشئ النظام المرحلة الأولى تلقائيًا ويفتح لك المصمم.</p></div></div><label className="wf-input-group"><span>اسم المعاملة <em>مطلوب</em></span><input autoFocus required value={name} onChange={e=>{setName(e.target.value);if(localError)setLocalError('')}} placeholder="مثال: طلب تغيير المسمى الوظيفي" /></label><label className="wf-input-group"><span>الوصف <em>اختياري</em></span><textarea rows={4} value={description} onChange={e=>setDescription(e.target.value)} placeholder="متى تستخدم هذه المعاملة؟"/></label><div className="wf-access-box"><div><strong>من يستطيع تقديم المعاملة؟</strong><span>يمكن تعديل إعداد التقديم لاحقًا.</span></div><div className="wf-choice-pills">{[['self','الموظف نفسه'],['company_admin','مدير الشركة']].map(([key,label])=>{const on=allowed.includes(key);return <button type="button" key={key} className={on?'on':''} onClick={()=>{const next=on?allowed.filter(x=>x!==key):[...allowed,key];setAllowed(next);if(next.length)setLocalError('')}}><span>{on&&<Check size={12}/>}</span>{label}</button>})}</div></div><div className="wf-create-footer"><button type="button" className="wf-secondary-action" onClick={onCancel}>إلغاء</button><button type="submit" className="wf-primary-action large" disabled={saving}>{saving?'جارٍ إنشاء القالب…':'حفظ وفتح المرحلة الأولى'}<ChevronLeft size={16}/></button></div></form></div>;
 }
 
-function TemplateList({templates,loading,error,onOpen,onCleanup,onCreate}:{templates:Template[];loading:boolean;error:string;onOpen:(id:string)=>void;onCleanup:()=>void;onCreate:()=>void}) {
+function TemplateList({templates,loading,error,onOpen,onCreate,onCopy,onDeactivate}:{templates:Template[];loading:boolean;error:string;onOpen:(id:string)=>void;onCreate:()=>void;onCopy:(id:string)=>void;onDeactivate:(id:string)=>void}) {
   const active=templates.filter(t=>t.status==='active').length;
-  return <div className="workflow-studio premium-studio wow-studio"><section className="wf-hero list"><div className="wf-hero-copy"><div className="wf-kicker">WORKFLOW STUDIO</div><div className="wf-hero-title-row"><span className="wf-hero-symbol"><WorkflowIcon size={28}/></span><div><h1>استوديو سير العمل</h1><p>مساحة تصميم مؤسسية لبناء قوالب معاملات مرنة، قابلة للمعاينة والاختبار قبل الاعتماد.</p></div></div></div><div className="wf-hero-actions"><span className="wf-metric-hero"><b>{templates.length}</b><small>قوالب</small></span><span className="wf-metric-hero"><b>{active}</b><small>معتمدة</small></span><button type="button" className="wf-hero-light" onClick={onCleanup}><Trash2 size={15}/>تصفير Phase 6</button><button type="button" className="wf-primary-action light" onClick={onCreate}><Plus size={16}/>إنشاء قالب</button></div></section>{error&&<div className="wf-alert-v2 danger"><CircleAlert size={19}/><div><strong>تعذر تحميل الاستوديو</strong><span>{error}</span></div></div>}{loading?<LoadingState/>:<section className="wf-template-zone"><div className="wf-section-intro"><div><div className="wf-kicker soft">TEMPLATES</div><h2>قوالب المعاملات</h2><p>كل قالب هنا مسودة أو إصدار معتمد من استوديو سير العمل.</p></div></div>{templates.length?<div className="wf-template-grid">{templates.map(t=><article className="wf-template-card" key={t.id}><div className="wf-template-head"><span className="wf-template-icon"><WorkflowIcon size={18}/></span><span className={`wf-status-pill ${t.status==='active'?'active':'draft'}`}><span/>{t.status==='active'?'معتمد':'مسودة'}</span></div><h3>{t.name_ar}</h3><p>{t.description||'لا يوجد وصف لهذا القالب.'}</p><div className="wf-template-stats"><span><b>{t.stage_count||0}</b>مراحل</span><span><b>{t.latest_version||1}</b>إصدار</span><span><b>{t.draft_id?'مفتوح':'—'}</b>مسودة</span></div><div className="wf-template-actions"><button type="button" className="wf-secondary-action" onClick={()=>onOpen(t.id)}>فتح التصميم</button><button type="button" className="wf-primary-action" onClick={()=>onOpen(t.id)}><Settings2 size={15}/>تعديل</button></div></article>)}</div>:<div className="wf-template-empty"><div><WorkflowIcon size={28}/></div><h3>لا توجد قوالب بعد</h3><p>ابدأ ببناء أول قالب، ثم اختر البيانات النظامية التي تريد أن تظهر تلقائيًا للمستخدمين.</p><button type="button" className="wf-primary-action" onClick={onCreate}><Plus size={16}/>إنشاء أول قالب</button></div>}</section>}</div>;
+  return <div className="workflow-studio premium-studio wow-studio"><section className="wf-hero list"><div className="wf-hero-copy"><div className="wf-kicker">WORKFLOW STUDIO</div><div className="wf-hero-title-row"><span className="wf-hero-symbol"><WorkflowIcon size={28}/></span><div><h1>استوديو سير العمل</h1><p>مساحة تصميم مؤسسية لبناء قوالب معاملات مرنة، قابلة للمعاينة والاختبار قبل الاعتماد.</p></div></div></div><div className="wf-hero-actions"><span className="wf-metric-hero"><b>{templates.length}</b><small>قوالب</small></span><span className="wf-metric-hero"><b>{active}</b><small>معتمدة</small></span><button type="button" className="wf-primary-action light" onClick={onCreate}><Plus size={16}/>إنشاء قالب</button></div></section>{error&&<div className="wf-alert-v2 danger"><CircleAlert size={19}/><div><strong>تعذر تحميل الاستوديو</strong><span>{error}</span></div></div>}{loading?<LoadingState/>:<section className="wf-template-zone"><div className="wf-section-intro"><div><div className="wf-kicker soft">TEMPLATES</div><h2>قوالب المعاملات</h2><p>كل قالب هنا مسودة أو إصدار معتمد أو غير نشط، مع إمكانية فتحه ومعاينته واختباره.</p></div></div>{templates.length?<div className="wf-template-grid">{templates.map(t=><article className="wf-template-card" key={t.id}><div className="wf-template-head"><span className="wf-template-icon"><WorkflowIcon size={18}/></span><span className={`wf-status-pill ${t.status==='active'?'active':'draft'}`}><span/>{t.status==='active'?'معتمد':t.status==='inactive'?'غير نشط':'مسودة'}</span></div><h3>{t.name_ar}</h3><p>{t.description||'لا يوجد وصف لهذا القالب.'}</p><div className="wf-template-stats"><span><b>{t.stage_count||0}</b>مراحل</span><span><b>{t.latest_version||1}</b>إصدار</span><span><b>{t.draft_id?'مفتوح':'—'}</b>مسودة</span></div><div className="wf-template-actions"><button type="button" className="wf-secondary-action" onClick={()=>onOpen(t.id)}>فتح التصميم</button><button type="button" className="wf-secondary-action" onClick={()=>onCopy(t.id)}>نسخ</button>{t.status==='active'&&<button type="button" className="wf-secondary-action" onClick={()=>onDeactivate(t.id)}>تعطيل</button>}<Link className="wf-secondary-action" to={`/workflow-studio/preview/${t.id}`}>معاينة</Link><Link className="wf-secondary-action" to={`/workflow-studio/test/${t.id}`}>اختبار</Link><button type="button" className="wf-primary-action" onClick={()=>onOpen(t.id)}><Settings2 size={15}/>تعديل</button></div></article>)}</div>:<div className="wf-template-empty"><div><WorkflowIcon size={28}/></div><h3>لا توجد قوالب بعد</h3><p>ابدأ ببناء أول قالب، ثم اختر البيانات النظامية التي تريد أن تظهر تلقائيًا للمستخدمين.</p><button type="button" className="wf-primary-action" onClick={onCreate}><Plus size={16}/>إنشاء أول قالب</button></div>}</section>}</div>;
 }

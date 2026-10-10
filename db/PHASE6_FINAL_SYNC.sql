@@ -66,6 +66,39 @@ CREATE TABLE IF NOT EXISTS workflow_fields (
   UNIQUE(workflow_id,field_key)
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_fields_workflow_stage_order ON workflow_fields(workflow_id,stage_id,sort_order);
+CREATE TABLE IF NOT EXISTS workflow_questions (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  stage_id TEXT,
+  question_key TEXT NOT NULL,
+  question_ar TEXT NOT NULL,
+  question_en TEXT,
+  question_type TEXT NOT NULL CHECK(question_type IN ('text','yes_no','select','notes')),
+  required INTEGER NOT NULL DEFAULT 0 CHECK(required IN (0,1)),
+  options_json TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+  FOREIGN KEY(stage_id) REFERENCES workflow_stages(id) ON DELETE CASCADE,
+  UNIQUE(workflow_id,question_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_questions_stage ON workflow_questions(stage_id,sort_order);
+
+CREATE TABLE IF NOT EXISTS workflow_conditions (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  stage_id TEXT,
+  source_type TEXT NOT NULL CHECK(source_type IN ('field','question')),
+  source_id TEXT NOT NULL,
+  operator TEXT NOT NULL,
+  expected_value TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+  FOREIGN KEY(stage_id) REFERENCES workflow_stages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_conditions_stage ON workflow_conditions(stage_id);
+
 
 CREATE TABLE IF NOT EXISTS workflow_transitions (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, from_stage_id TEXT NOT NULL,
@@ -125,6 +158,7 @@ CREATE TABLE IF NOT EXISTS transaction_answers (
   FOREIGN KEY(field_id) REFERENCES workflow_fields(id) ON DELETE RESTRICT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_answer_field ON transaction_answers(transaction_id,field_id) WHERE field_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_transaction_answer_question ON transaction_answers(transaction_id,question_id) WHERE question_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS transaction_actions (
   id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL, company_id TEXT NOT NULL,
@@ -168,7 +202,18 @@ INSERT OR IGNORE INTO permissions(id,resource,action,name_ar,name_en,description
 ('transaction.process','transaction','process','معالجة المعاملات','Process transactions','معالجة المرحلة الحالية'),
 ('transaction.cancel','transaction','cancel','إلغاء المعاملة','Cancel transaction','إلغاء المعاملة'),
 ('transaction.reject','transaction','reject','رفض المعاملة','Reject transaction','رفض المعاملة'),
-('transaction.return','transaction','return','إرجاع المعاملة','Return transaction','إرجاع المعاملة لمرحلة سابقة');
+('transaction.return','transaction','return','إرجاع المعاملة','Return transaction','إرجاع المعاملة لمرحلة سابقة'),
+('transaction.feedback','transaction','feedback','ملاحظات الموظف','Employee feedback','إضافة ملاحظات الموظف ضمن سير العمل'),
+('transaction.attach','transaction','attach','مرفقات المعاملة','Transaction attachments','إدارة مرفقات المعاملة');
+
+CREATE TABLE IF NOT EXISTS workflow_settings (
+  workflow_id TEXT PRIMARY KEY,
+  subject_mode TEXT NOT NULL DEFAULT 'requester' CHECK(subject_mode IN ('requester','different_employee')),
+  updated_by TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_settings_mode ON workflow_settings(subject_mode);
 
 -- Phase 6.1: selected system-data fields and requester/target settings.
 CREATE TABLE IF NOT EXISTS workflow_system_fields (

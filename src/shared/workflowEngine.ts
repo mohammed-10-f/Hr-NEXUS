@@ -1,6 +1,6 @@
 export type WorkflowCondition = {
   fieldId: string;
-  operator: 'equals'|'not_equals'|'contains'|'is_true'|'is_false'|'in'|'is_empty'|'is_not_empty';
+  operator: 'equals'|'not_equals'|'contains'|'is_true'|'is_false'|'in'|'is_empty'|'is_not_empty'|'greater_than'|'greater_or_equal'|'less_than'|'less_or_equal';
   values: string[];
 };
 
@@ -28,6 +28,15 @@ export function evaluateCondition(condition: WorkflowCondition, values: Record<s
   if(op==='not_equals') return actualList.every(v=>!expected.includes(v));
   if(op==='contains') return actualList.some(v=>expected.some(e=>v.includes(e)));
   if(op==='in') return actualList.some(v=>expected.includes(v));
+  if(['greater_than','greater_or_equal','less_than','less_or_equal'].includes(op)){
+    const actualNumber=Number(actual);
+    const expectedNumber=Number(expected[0]);
+    if(!Number.isFinite(actualNumber) || !Number.isFinite(expectedNumber)) return false;
+    if(op==='greater_than') return actualNumber>expectedNumber;
+    if(op==='greater_or_equal') return actualNumber>=expectedNumber;
+    if(op==='less_than') return actualNumber<expectedNumber;
+    return actualNumber<=expectedNumber;
+  }
   return false;
 }
 

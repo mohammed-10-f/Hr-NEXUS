@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 
 const responsibility: Record<string,string>={direct_manager:'المدير المباشر للموظف المعني',position_holder:'شاغل المنصب المرتبط',department_manager:'مدير الإدارة',role:'دور وظيفي',permission:'حامل صلاحية',company_admin:'مدير الشركة',employee_owner:'الموظف المعني'};
 const fieldTypes: Record<string,string>={text:'نص',textarea:'ملاحظات',boolean:'نعم / لا',select:'قائمة اختيار',multiselect:'اختيار متعدد',number:'رقم',date:'تاريخ',datetime:'تاريخ ووقت',employee:'اختيار موظف',organization_unit:'وحدة تنظيمية',position:'منصب',user:'مستخدم'};
-const sampleValue=(key:string)=>({employee_number:'EMP-0015',full_name:'محمد أحمد',job_title:'أخصائي موارد بشرية',organization_unit:'الموارد البشرية',position:'أخصائي موارد بشرية',direct_manager:'المدير المباشر',actual_start_date:'12 يناير 2026',join_date:'12 يناير 2026',basic_salary:'حسب صلاحية العرض',housing_allowance:'حسب صلاحية العرض',transport_allowance:'حسب صلاحية العرض',work_location:'المقر الرئيسي'} as Record<string,string>)[key]||'قيمة من النظام';
+const sampleValue=(key:string)=>key==='employee_number'?'رقم الموظف عند التشغيل':'تُستدعى القيمة الفعلية من Phase 5 عند التشغيل';
 
 export function WorkflowPreview(){
  const {typeId}=useParams<{typeId?:string}>(); const [data,setData]=useState<any>(null); const [error,setError]=useState('');
