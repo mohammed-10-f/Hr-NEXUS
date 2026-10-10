@@ -170,6 +170,7 @@ export function WorkflowAdmin() {
   const [systemPanel, setSystemPanel] = useState<'requester' | 'target' | null>(null);
   const [systemSearch, setSystemSearch] = useState('');
   const [rightTab, setRightTab] = useState<'summary' | 'conditions'>('summary');
+  const [companyActivations, setCompanyActivations] = useState<any[]>([]);
   const stageRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   async function loadList() {
@@ -179,6 +180,7 @@ export function WorkflowAdmin() {
     catch (e) { setError(errorText(e, 'تعذر تحميل قوالب المعاملات.')); }
     finally { setLoading(false); }
   }
+  async function loadCompanyActivations(id:string){ try { setCompanyActivations((await api<any>(`/api/workflows/admin/types/${id}/companies`)).items||[]); } catch { setCompanyActivations([]); } }
   async function loadCatalog() {
     try { setCatalog(await api<Catalog>('/api/workflows/admin/catalog')); }
     catch (e) { setError(errorText(e, 'تعذر تحميل بيانات النظام المتاحة للاستدعاء.')); }
@@ -198,11 +200,11 @@ export function WorkflowAdmin() {
     finally { setLoading(false); }
   }
   function hydrate(t: any, w: any) {
-    setType(t); setWorkflow(w.workflow); setName(t.name_ar || ''); setDescription(w.workflow.description || t.description || ''); setSubmitters(w.workflow.allowed_submitters || ['self']);
+    setType(t); setWorkflow(w.workflow); void loadCompanyActivations(t.id); setName(t.name_ar || ''); setDescription(w.workflow.description || t.description || ''); setSubmitters(w.workflow.allowed_submitters || ['self']);
     setTargetEnabled(Boolean(w.requestSettings?.targetEmployeeEnabled));
     setTargetRequired(Boolean(w.requestSettings?.targetEmployeeRequired));
     setSystemFields((w.systemFields || []).map((x: any) => ({ sourceKey: x.source_key, scope: x.scope, labelAr: x.label_ar, sortOrder: Number(x.sort_order || 0) })));
-    const ss = w.stages.map((x: any, i: number) => ({ id: x.id, nameAr: x.name_ar, responsibleType: x.responsible_type, responsibleValue: x.responsible_value || '', durationMinutes: x.duration_minutes === null ? null : Number(x.duration_minutes), stageOrder: i + 1, delegateEnabled: Boolean(x.config?.delegate?.enabled), delegateFieldId: x.config?.delegate?.employeeFieldId || '' }));
+    const ss = w.stages.map((x: any, i: number) => ({ id: x.id, nameAr: x.name_ar, responsibleType: x.responsible_type, responsibleValue: x.responsible_value || '', durationMinutes: x.duration_minutes === null ? null : Number(x.duration_minutes)/60, stageOrder: i + 1, delegateEnabled: Boolean(x.config?.delegate?.enabled), delegateFieldId: x.config?.delegate?.employeeFieldId || '' }));
     setStages(ss); setSelectedStage(ss[0]?.id || '');
     setFields(w.fields.map((x: any) => ({ id: x.id, stageId: x.stage_id || null, fieldKey: x.field_key, labelAr: x.label_ar, fieldType: x.field_type, required: Boolean(x.required), displayOnly: Boolean(x.config?.displayOnly), staticText: String(x.config?.staticText || ''), options: x.options || [], sortOrder: Number(x.sort_order || 0) })));
     setRoutes(w.transitions.map((x: any) => ({ id: x.id, fromStageId: x.from_stage_id, toStageId: x.to_stage_id || null, action: x.action, labelAr: x.label_ar, condition: x.condition || null, sortOrder: Number(x.sort_order || 0), active: Boolean(x.active) })));
@@ -324,7 +326,7 @@ export function WorkflowAdmin() {
         nameAr: name.trim() || type.name_ar,
         description: description.trim() || null,
         allowedSubmitters: submitters.length ? submitters : ['self'],
-        stages: stages.map(s => ({ ...s, nameAr: s.nameAr.trim() || `المرحلة ${s.stageOrder}`, config: { delegate: { enabled: Boolean(s.delegateEnabled), employeeFieldId: s.delegateFieldId || null } } })),
+        stages: stages.map(s => ({ ...s, durationMinutes: s.durationMinutes===null?null:Number(s.durationMinutes)*60, nameAr: s.nameAr.trim() || `المرحلة ${s.stageOrder}`, config: { delegate: { enabled: Boolean(s.delegateEnabled), employeeFieldId: s.delegateFieldId || null } } })),
         fields: safeFields,
         transitions: routes,
         systemFields,
@@ -372,7 +374,7 @@ export function WorkflowAdmin() {
     try {
       const v = await api<any>(`/api/workflows/admin/workflows/${workflow.id}/validate`, { method: 'POST' }); setValidation(v);
       if (!v.valid) { setError('لا يمكن اعتماد القالب قبل إصلاح الأخطاء الموضحة في بوابة الجودة.'); return; }
-      await api(`/api/workflows/admin/workflows/${workflow.id}/publish`, { method: 'POST' }); setNotice('تم اعتماد القالب. أصبح التصميم صالحًا للتشغيل.'); await loadList();
+      await api(`/api/workflows/admin/workflows/${workflow.id}/publish`, { method: 'POST' }); setNotice('تم اعتماد القالب. أصبح التصميم صالحًا للتشغيل.'); await loadList(); void loadCompanyActivations(workflow.transaction_type_id);
     } catch (e) { setError(errorText(e, 'تعذر اعتماد القالب.')); }
     finally { setSaving(false); }
   }
@@ -442,7 +444,7 @@ export function WorkflowAdmin() {
             const ResponsibilityIcon = responsibilityIcons[s.responsibleType] || ShieldCheck;
             return <article key={s.id} ref={el => {stageRefs.current[s.id]=el}} className={`wf-stage-card ${selectedStage===s.id?'focus':''}`} onFocus={() => setSelectedStage(s.id)}>
               <div className="wf-stage-top"><div className="wf-stage-heading"><span className="wf-stage-number">{i+1}</span><div><span className="wf-stage-kicker">STAGE {String(i+1).padStart(2,'0')}</span><input value={s.nameAr} className="wf-stage-name-input" onChange={e => setStages(stages.map(x => x.id===s.id?{...x,nameAr:e.target.value}:x))} placeholder="اسم المرحلة" /></div></div><div className="wf-stage-actions"><button className="wf-icon-action" title="نقل لأعلى" disabled={i===0} onClick={()=>moveStage(i,-1)}><ArrowUp size={15}/></button><button className="wf-icon-action" title="نقل لأسفل" disabled={i===stages.length-1} onClick={()=>moveStage(i,1)}><ArrowDown size={15}/></button><button className="wf-icon-action danger" title="حذف المرحلة" disabled={stages.length===1} onClick={()=>removeStage(s.id)}><Trash2 size={15}/></button></div></div>
-              <div className="wf-stage-meta-grid"><label className="wf-input-group"><span>مسؤول المرحلة</span><div className="wf-select-with-icon"><ResponsibilityIcon size={15}/><select value={s.responsibleType} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleType:e.target.value,responsibleValue:''}:x))}>{Object.entries(responsibility).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div></label>{s.responsibleType==='role'&&<label className="wf-input-group"><span>الدور</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الدور</option>{(catalog?.roles||[]).map(r=><option key={r.code} value={r.code}>{r.nameAr}</option>)}</select></label>}{s.responsibleType==='permission'&&<label className="wf-input-group"><span>الصلاحية</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الصلاحية</option>{(catalog?.permissions||[]).map(p=><option key={p.id} value={p.id}>{p.nameAr}</option>)}</select></label>}<label className="wf-input-group"><span>مدة المرحلة <em>اختياري</em></span><div className="wf-input-icon"><Clock3 size={15}/><input type="number" min="1" value={s.durationMinutes??''} placeholder="بدون حد" onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,durationMinutes:e.target.value?Number(e.target.value):null}:x))}/></div></label></div>
+              <div className="wf-stage-meta-grid"><label className="wf-input-group"><span>مسؤول المرحلة</span><div className="wf-select-with-icon"><ResponsibilityIcon size={15}/><select value={s.responsibleType} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleType:e.target.value,responsibleValue:''}:x))}>{Object.entries(responsibility).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div></label>{s.responsibleType==='role'&&<label className="wf-input-group"><span>الدور</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الدور</option>{(catalog?.roles||[]).map(r=><option key={r.code} value={r.code}>{r.nameAr}</option>)}</select></label>}{s.responsibleType==='permission'&&<label className="wf-input-group"><span>الصلاحية</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الصلاحية</option>{(catalog?.permissions||[]).map(p=><option key={p.id} value={p.id}>{p.nameAr}</option>)}</select></label>}<label className="wf-input-group"><span>مدة المرحلة بالساعات الفعلية <em>اختياري</em></span><div className="wf-input-icon"><Clock3 size={15}/><input type="number" min="0.5" step="0.5" value={s.durationMinutes??''} placeholder="بدون حد" onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,durationMinutes:e.target.value?Number(e.target.value):null}:x))}/></div></label></div>
               <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>التمرير لموظف آخر</strong><span className="wf-optional-badge">اختياري</span></div><p>يمكن للمسؤول، أثناء معالجة المرحلة، أن يختار «تمرير لموظف آخر» عند الحاجة. إذا لم يختره تستمر المعاملة بشكل طبيعي. بعد إكمال المهمة تعود تلقائيًا إلى هذه المرحلة.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:''}:x))}/><span className="wf-toggle"><i /></span><b>{s.delegateEnabled?'السماح بالتمرير لموظف آخر':'لا تسمح بالتمرير لموظف آخر'}</b></label>{s.delegateEnabled&&<><label className="wf-input-group"><span>عنصر اختيار الموظف للتمرير</span><select value={s.delegateFieldId} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateFieldId:e.target.value}:x))}><option value="">اختر عنصر موظف</option>{stageFields.filter(f=>f.fieldType==='employee'&&!f.displayOnly).map(f=><option key={f.id} value={f.id}>{f.labelAr}</option>)}</select></label><div className="wf-delegation-note"><CheckCircle2 size={14}/> عند إكمال الموظف المفوَّض مهمته تعود المعاملة إلى هذه المرحلة الأصلية.</div></>}</div></div>
               <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة والحقول يمكن استخدامها كقرارات عند الحاجة، والنصوص للعرض فقط.</span></div><div className="wf-title-actions"><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button><button className="wf-secondary-action small" onClick={()=>addField(s.id,true)}><FileText size={13}/>إضافة نص</button></div></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
               <div className="wf-route-summary"><GitBranch size={15}/><span>{stageRoutes.length ? `${stageRoutes.length} فروع/شروط معرفة لهذه المرحلة — تُدار جميعها من قسم «الشروط والمسارات».` : (i===stages.length-1 ? 'بدون شرط مطابق، تكتمل المعاملة بعد نجاح هذه المرحلة.' : 'بدون شرط مطابق، ينتقل المحرك تلقائيًا إلى المرحلة التالية.')}</span></div>{i===stages.length-1&&<div className="wf-complete-note"><CheckCircle2 size={17}/><span><b>نهاية منطقية للمسار</b> — هذه آخر مرحلة فعلية باسمها الحالي. لا توجد مرحلة إضافية مخفية.</span></div>}
@@ -467,6 +469,8 @@ export function WorkflowAdmin() {
           <SectionTitle number="06" eyebrow="Quality Gate" title="بوابة جودة القالب" subtitle="أي خطأ يمنع الاعتماد، وكل مشكلة مرتبطة بمكان واضح داخل التصميم." action={<button className="wf-secondary-action" onClick={()=>void save(true)}><ShieldCheck size={16}/>فحص الآن</button>} />
           {!validation?<div className="wf-quality-empty"><ShieldCheck size={25}/><strong>جاهز للفحص</strong><span>شغّل الفحص قبل الاعتماد للتأكد من المسؤوليات والعناصر والمسارات.</span></div>:<ValidationPanel validation={validation} stages={stages} onJump={scrollTo} />}
         </section>
+
+        {workflow?.status==='active'&&<section className="wf-card wf-section-card"><SectionTitle number="07" eyebrow="تفعيل الشركات" title="إتاحة المعاملة للشركات" subtitle="بعد الاعتماد، يقرر Super Admin أي الشركات يمكنها استخدام هذا القالب. إعدادات الشركة لا تغيّر منطق المسار." /><div className="wf-company-list">{companyActivations.map((c:any)=><label className="wf-company-row" key={c.id}><span><strong>{c.display_name}</strong><small>{c.company_identifier}</small></span><input type="checkbox" checked={Boolean(c.active)} onChange={async e=>{try{await api(`/api/workflows/admin/types/${workflow.transaction_type_id}/companies`,{method:'POST',body:JSON.stringify({companyId:c.id,active:e.target.checked})});setCompanyActivations(v=>v.map(x=>x.id===c.id?{...x,active:e.target.checked}:x));}catch(err){setError(errorText(err,'تعذر تحديث تفعيل الشركة.'));}}}/></label>)}</div></section>}
       </main>
 
       <aside className="wf-side-column">

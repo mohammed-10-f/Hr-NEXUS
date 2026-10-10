@@ -522,6 +522,31 @@ app.post('/admin/workflows/:id/publish', async c=>{
   return c.json({ok:true,status:'active'});
 });
 
+
+const companyActivationSchema = z.object({ companyId: z.string().uuid(), active: z.boolean() });
+app.get('/admin/types/:id/companies', async c=>{
+  const id=c.req.param('id');
+  const rows=await c.env.DB.prepare(`
+    SELECT c.id,c.display_name,c.company_identifier,COALESCE(wcs.active,0) active,
+      wcs.allowed_submitters_json
+    FROM companies c LEFT JOIN workflow_company_settings wcs ON wcs.company_id=c.id
+      AND wcs.workflow_id=(SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='active' LIMIT 1)
+    WHERE c.status='active' ORDER BY c.display_name`).bind(id).all<any>();
+  return c.json({items:rows.results.map((x:any)=>({...x,active:Boolean(x.active),allowedSubmitters:safeJson(x.allowed_submitters_json,['self'])}))});
+});
+app.post('/admin/types/:id/companies', async c=>{
+  const parsed=companyActivationSchema.safeParse(await c.req.json().catch(()=>null));
+  if(!parsed.success)return c.json({error:'WORKFLOW-COMPANY-001',message:'بيانات الشركة غير صحيحة.'},400);
+  const typeId=c.req.param('id');
+  const activeW=await c.env.DB.prepare(`SELECT id,allowed_submitters_json FROM workflow_definitions WHERE transaction_type_id=? AND status='active' LIMIT 1`).bind(typeId).first<any>();
+  if(!activeW)return c.json({error:'WORKFLOW-004',message:'يجب اعتماد المعاملة قبل تفعيلها للشركات.'},409);
+  const company=await c.env.DB.prepare(`SELECT id FROM companies WHERE id=? AND status='active'`).bind(parsed.data.companyId).first();
+  if(!company)return c.json({error:'COMPANY_NOT_FOUND'},404);
+  await c.env.DB.prepare(`INSERT INTO workflow_company_settings(workflow_id,company_id,active,allowed_submitters_json) VALUES(?,?,?,?) ON CONFLICT(workflow_id,company_id) DO UPDATE SET active=excluded.active,updated_at=CURRENT_TIMESTAMP`).bind(activeW.id,parsed.data.companyId,parsed.data.active?1:0,activeW.allowed_submitters_json||JSON.stringify(['self'])).run();
+  await audit(c,parsed.data.active?'workflow_activated_for_company':'workflow_deactivated_for_company','workflow',activeW.id,{companyId:parsed.data.companyId});
+  return c.json({ok:true,active:parsed.data.active});
+});
+
 app.post('/admin/workflows/:id/deactivate', async c=>{
   const id=c.req.param('id');
   const w=await loadWorkflow(c,id);

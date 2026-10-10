@@ -58,9 +58,11 @@ export function AppShell(){
  const companyManagement:any[]=[];
  if(canUsers) companyManagement.push({label:'المستخدمون',to:'/users',icon:Users});
  if(canRoles) companyManagement.push({label:'الأدوار والصلاحيات',to:'/roles',icon:ShieldCheck});
- const visibleCompanyNav=companyNav.map(item=>item.label==='الموظفون' ? (canEmployees ? {...item,children:item.children?.filter((child:any)=>child.to!=='/organization'||canOrganization)} : {...item,children:[]}) : item).filter(item=>item.label!=='الموظفون'||item.children?.length);
+ if((s.roles||[]).some((r:string)=>['company_admin','مدير الشركة'].includes(r))) companyManagement.push({label:'إعدادات سير العمل',to:'/workflow-settings',icon:Workflow});
+ const transactionNav={label:'قائمة الطلبات',to:'/transactions',icon:FileText};
+ const visibleCompanyNav=[transactionNav,...companyNav].map(item=>item.label==='الموظفون' ? (canEmployees ? {...item,children:item.children?.filter((child:any)=>child.to!=='/organization'||canOrganization)} : {...item,children:[]}) : item).filter(item=>item.label!=='الموظفون'||item.children?.length);
  const nav=canManagePlatform?[{label:'الرئيسية',to:'/',icon:LayoutDashboard},{label:'الشركات',to:'/platform/companies',icon:Building2},{label:'استوديو سير العمل',icon:Workflow,children:[{label:'الاستوديو',to:'/workflow-studio'},{label:'بيئة الاختبار',to:'/workflow-studio/test'}]},{label:'سجل التدقيق',to:'#',icon:FileText}]:[...visibleCompanyNav,...(companyManagement.length?[{label:'الإدارة',icon:ShieldCheck,children:companyManagement}]:[]),...(canReviewAccessRequests?[{label:'طلبات دخول مدير المنصة',to:'/access-requests',icon:ShieldCheck}]:[])];
- const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform/companies/new')?'إضافة شركة':location.pathname.startsWith('/platform/companies/')?'تفاصيل الشركة':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/workflow-studio/test')?'بيئة الاختبار':location.pathname.startsWith('/workflow-studio')?'استوديو سير العمل':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':location.pathname.startsWith('/users')?'المستخدمون':location.pathname.startsWith('/roles')?'الأدوار والصلاحيات':'HR Nexus';
+ const title=location.pathname==='/'?'الرئيسية':location.pathname.startsWith('/platform/companies/new')?'إضافة شركة':location.pathname.startsWith('/platform/companies/')?'تفاصيل الشركة':location.pathname.startsWith('/platform')?'الشركات':location.pathname.startsWith('/workflow-studio/test')?'بيئة الاختبار':location.pathname.startsWith('/workflow-studio')?'استوديو سير العمل':location.pathname.startsWith('/transactions')?'قائمة الطلبات':location.pathname.startsWith('/employees')?'الموظفون':location.pathname.startsWith('/organization')?'الهيكل التنظيمي':location.pathname.startsWith('/access-requests')?'طلبات الدخول':location.pathname.startsWith('/users')?'المستخدمون':location.pathname.startsWith('/roles')?'الأدوار والصلاحيات':'HR Nexus';
  const toggle=(label:string)=>setExpanded(v=>v.includes(label)?v.filter(x=>x!==label):[...v,label]);
  async function logout(){
   if(busyAction)return;
@@ -93,6 +95,7 @@ export function AppShell(){
  if(location.pathname.startsWith('/workflow-studio') && !canManagePlatform) return <ForbiddenState/>;
  if(accessRequestsRoute && !canReviewAccessRequests) return <ForbiddenState/>;
  if(location.pathname.startsWith('/users') && !canUsers) return <ForbiddenState/>;
+ if(location.pathname.startsWith('/workflow-settings') && !(s.roles||[]).some((r:string)=>['company_admin','مدير الشركة'].includes(r))) return <ForbiddenState/>;
  if(location.pathname.startsWith('/roles') && !canRoles) return <ForbiddenState/>;
  if(location.pathname.startsWith('/organization') && !canOrganization) return <ForbiddenState/>;
  if(location.pathname.startsWith('/employees') && !canEmployees) return <ForbiddenState/>;

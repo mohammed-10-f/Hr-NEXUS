@@ -9,9 +9,10 @@ import platform from './server/routes/platform';
 import context from './server/routes/context';
 import company from './server/routes/company';
 import workflows from './server/routes/workflows';
+import transactions from './server/routes/transactions';
 
 const app=new Hono<Env>();
-const BUILD_ID='PHASE6-ENGINE-REBUILD-20261008';
+const BUILD_ID='PHASE6-ENTERPRISE-RUNTIME-20261010';
 
 app.onError((err,c)=>{
   console.error('HR_NEXUS_UNHANDLED_ERROR',err);
@@ -28,6 +29,7 @@ app.route('/api/employees',employees);
 app.route('/api/organization',organization);
 app.route('/api/company',company);
 app.route('/api/workflows',workflows);
+app.route('/api/transactions',transactions);
 app.all('/api/*',(c)=>c.json({error:'NOT_FOUND'},404));
 app.all('*',async c=>c.env.ASSETS.fetch(c.req.raw));
 export default {
