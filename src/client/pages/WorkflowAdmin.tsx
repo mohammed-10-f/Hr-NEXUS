@@ -99,7 +99,7 @@ const responsibilityIcons: Record<string, any> = {
   company_admin: ShieldCheck,
   employee_owner: UserRound,
 };
-const actions: Record<string, string> = { next: 'تمرير المعاملة', return: 'إرجاع', reject: 'رفض', cancel: 'إلغاء', complete: 'إكمال' };
+const actions: Record<string, string> = { next: 'الانتقال إلى مرحلة', return: 'إرجاع', reject: 'رفض', cancel: 'إلغاء', complete: 'إكمال' };
 const groupLabels: Record<string, string> = {
   identity: 'الهوية والبيانات الأساسية',
   employment: 'البيانات الوظيفية',
@@ -253,21 +253,22 @@ export function WorkflowAdmin() {
   function removeField(id: string) { setFields(fields.filter(f => f.id !== id)); setRoutes(routes.map(r => r.condition?.fieldId === id ? { ...r, condition: null } : r)); }
   function updateField(id: string, patch: Partial<Field>) { setFields(fs => fs.map(f => f.id === id ? { ...f, ...patch } : f)); }
   function addRoute(stageId: string) {
+    if (!stageId) return;
     const idx = stages.findIndex(s => s.id === stageId);
+    if (idx < 0) return;
     const next = stages[idx + 1]?.id || null;
     const previous = stages[idx - 1]?.id || null;
-    const isLast = !next;
+    const action = next ? 'next' : (previous ? 'return' : 'complete');
     setRoutes(prev => [...prev, {
       id: uid(),
       fromStageId: stageId,
       toStageId: next || previous || null,
-      action: next ? 'next' : (previous ? 'return' : 'complete'),
-      labelAr: 'فرع مشروط',
+      action,
+      labelAr: 'انتقال مشروط',
       condition: null,
       sortOrder: prev.filter(r => r.fromStageId === stageId).length,
       active: true
     }]);
-    if (isLast && previous) setNotice('في آخر مرحلة يمكنك إنشاء فرع مشروط يعيد المعاملة إلى مرحلة سابقة، بينما يبقى الإكمال هو المسار الافتراضي عند عدم تحقق الشرط.');
   }
   function scrollTo(id: string) { setSelectedStage(id); requestAnimationFrame(() => stageRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' })); }
   function setTargetSwitch(checked: boolean) {
@@ -446,23 +447,26 @@ export function WorkflowAdmin() {
               <div className="wf-stage-top"><div className="wf-stage-heading"><span className="wf-stage-number">{i+1}</span><div><span className="wf-stage-kicker">STAGE {String(i+1).padStart(2,'0')}</span><input value={s.nameAr} className="wf-stage-name-input" onChange={e => setStages(stages.map(x => x.id===s.id?{...x,nameAr:e.target.value}:x))} placeholder="اسم المرحلة" /></div></div><div className="wf-stage-actions"><button className="wf-icon-action" title="نقل لأعلى" disabled={i===0} onClick={()=>moveStage(i,-1)}><ArrowUp size={15}/></button><button className="wf-icon-action" title="نقل لأسفل" disabled={i===stages.length-1} onClick={()=>moveStage(i,1)}><ArrowDown size={15}/></button><button className="wf-icon-action danger" title="حذف المرحلة" disabled={stages.length===1} onClick={()=>removeStage(s.id)}><Trash2 size={15}/></button></div></div>
               <div className="wf-stage-meta-grid"><label className="wf-input-group"><span>مسؤول المرحلة</span><div className="wf-select-with-icon"><ResponsibilityIcon size={15}/><select value={s.responsibleType} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleType:e.target.value,responsibleValue:''}:x))}>{Object.entries(responsibility).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div></label>{s.responsibleType==='role'&&<label className="wf-input-group"><span>الدور</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الدور</option>{(catalog?.roles||[]).map(r=><option key={r.code} value={r.code}>{r.nameAr}</option>)}</select></label>}{s.responsibleType==='permission'&&<label className="wf-input-group"><span>الصلاحية</span><select value={s.responsibleValue} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,responsibleValue:e.target.value}:x))}><option value="">اختر الصلاحية</option>{(catalog?.permissions||[]).map(p=><option key={p.id} value={p.id}>{p.nameAr}</option>)}</select></label>}<label className="wf-input-group"><span>مدة المرحلة بالساعات الفعلية <em>اختياري</em></span><div className="wf-input-icon"><Clock3 size={15}/><input type="number" min="0.5" step="0.5" value={s.durationMinutes??''} placeholder="بدون حد" onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,durationMinutes:e.target.value?Number(e.target.value):null}:x))}/></div></label></div>
               <div className="wf-delegation-card"><div><div className="wf-delegation-title"><UsersRound size={16}/><strong>التمرير لموظف آخر</strong><span className="wf-optional-badge">اختياري</span></div><p>يمكن للمسؤول، أثناء معالجة المرحلة، أن يختار «تمرير لموظف آخر» عند الحاجة. إذا لم يختره تستمر المعاملة بشكل طبيعي. بعد إكمال المهمة تعود تلقائيًا إلى هذه المرحلة.</p></div><div className="wf-delegation-controls"><label className="wf-toggle-row"><input type="checkbox" checked={s.delegateEnabled} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateEnabled:e.target.checked,delegateFieldId:''}:x))}/><span className="wf-toggle"><i /></span><b>{s.delegateEnabled?'السماح بالتمرير لموظف آخر':'لا تسمح بالتمرير لموظف آخر'}</b></label>{s.delegateEnabled&&<><label className="wf-input-group"><span>عنصر اختيار الموظف للتمرير</span><select value={s.delegateFieldId} onChange={e=>setStages(stages.map(x=>x.id===s.id?{...x,delegateFieldId:e.target.value}:x))}><option value="">اختر عنصر موظف</option>{stageFields.filter(f=>f.fieldType==='employee'&&!f.displayOnly).map(f=><option key={f.id} value={f.id}>{f.labelAr}</option>)}</select></label><div className="wf-delegation-note"><CheckCircle2 size={14}/> عند إكمال الموظف المفوَّض مهمته تعود المعاملة إلى هذه المرحلة الأصلية.</div></>}</div></div>
-              <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة والحقول يمكن استخدامها كقرارات عند الحاجة، والنصوص للعرض فقط.</span></div><div className="wf-title-actions"><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button><button className="wf-secondary-action small" onClick={()=>addField(s.id,true)}><FileText size={13}/>إضافة نص</button></div></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
+              <div className="wf-stage-content"><div className="wf-content-head"><div><strong>عناصر المرحلة</strong><span>الأسئلة والحقول يمكن استخدامها كقرارات عند الحاجة، والنصوص للعرض فقط.</span></div><div className="wf-title-actions"><button className="wf-secondary-action small" onClick={()=>addField(s.id)}><Plus size={14}/>إضافة سؤال</button><button className="wf-secondary-action small" onClick={()=>addField(s.id,true)}><FileText size={13}/>إضافة نص</button><button className="wf-secondary-action small" onClick={()=>{setSelectedStage(s.id);addRoute(s.id)}}><GitBranch size={13}/>إضافة شرط</button></div></div><FieldEditor fields={stageFields} onUpdate={updateField} onRemove={removeField} /></div>
               <div className="wf-route-summary"><GitBranch size={15}/><span>{stageRoutes.length ? `${stageRoutes.length} فروع/شروط معرفة لهذه المرحلة — تُدار جميعها من قسم «الشروط والمسارات».` : (i===stages.length-1 ? 'بدون شرط مطابق، تكتمل المعاملة بعد نجاح هذه المرحلة.' : 'بدون شرط مطابق، ينتقل المحرك تلقائيًا إلى المرحلة التالية.')}</span></div>{i===stages.length-1&&<div className="wf-complete-note"><CheckCircle2 size={17}/><span><b>نهاية منطقية للمسار</b> — هذه آخر مرحلة فعلية باسمها الحالي. لا توجد مرحلة إضافية مخفية.</span></div>}
             </article>;
           })}</div>
         </section>
 
         <section id="wf-conditions" className="wf-card wf-section-card">
-          <SectionTitle number="05" eyebrow="الشروط والمسارات" title="منطق الانتقال" subtitle="هذا القسم مستقل عن إعداد المراحل. المسار الطبيعي تلقائي، ولا تحتاج إلى إنشاء Route إلا عندما تريد فرعًا أو إرجاعًا أو قرارًا خاصًا." action={<button className="wf-primary-action" onClick={()=>addRoute(stages[0]?.id || '')} disabled={!stages.length}><Plus size={16}/>إضافة شرط</button>} />
+          <SectionTitle number="05" eyebrow="الشروط والمسارات" title="منطق الانتقال" subtitle="كل شرط مرتبط بالمرحلة التي يخرج منها. اختر اسم العنصر ثم القيمة ثم المرحلة الهدف؛ يمكن للانتقال المشروط أن يتجه إلى مرحلة سابقة أو لاحقة، بينما يبقى المسار الطبيعي تلقائيًا." action={<button className="wf-primary-action" onClick={()=>addRoute(selectedStage || stages[0]?.id || '')} disabled={!stages.length}><Plus size={16}/>إضافة شرط للمرحلة المحددة</button>} />
           <div className="wf-condition-principle global"><GitBranch size={16}/><span><b>قاعدة المحرك:</b> يفحص الشروط بالترتيب. عند تحقق شرط ينفذ وجهته؛ وإذا لم يتحقق أي شرط يستخدم المسار الطبيعي للمرحلة التالية، وفي آخر مرحلة يكتمل الطلب.</span></div>
-          {routes.length ? routes.map(r=>{
-            const fromStage=stages.find(st=>st.id===r.fromStageId);
-            if(!fromStage) return null;
-            return <div className="wf-global-route" key={r.id}>
-              <div className="wf-global-route-head"><span className="wf-status-pill"><span/>من {fromStage.nameAr}</span><button type="button" className="wf-icon-action" title="حذف الشرط" onClick={()=>setRoutes(routes.filter(x=>x.id!==r.id))}><Trash2 size={15}/></button></div>
-              <RouteEditor stage={fromStage} stages={stages} fields={fields} routes={[r]} onChange={next=>setRoutes(routes.map(x=>x.id===next.id?next:x))} onAdd={()=>addRoute(fromStage.id)} onRemove={id=>setRoutes(routes.filter(x=>x.id!==id))} />
-            </div>;
-          }) : <div className="wf-quality-empty"><GitBranch size={24}/><strong>لا توجد شروط مخصصة</strong><span>المحرك يستخدم التسلسل الطبيعي تلقائيًا.</span></div>}
+          {routes.length ? stages.flatMap(stage=>{
+            const stageRoutes=routes.filter(r=>r.fromStageId===stage.id).sort((a,b)=>a.sortOrder-b.sortOrder);
+            if(!stageRoutes.length) return [];
+            return [<div className="wf-global-route" key={`stage-routes-${stage.id}`}>
+              <div className="wf-global-route-head"><span className="wf-status-pill active"><span/>شروط {stage.nameAr}</span><button type="button" className="wf-secondary-action small" onClick={()=>addRoute(stage.id)}><Plus size={13}/>إضافة شرط</button></div>
+              {stageRoutes.map(r=><div className="wf-global-route-item" key={r.id}>
+                <div className="wf-global-route-item-head"><span>الشرط {stageRoutes.indexOf(r)+1}</span><button type="button" className="wf-icon-action" title="حذف الشرط" onClick={()=>setRoutes(routes.filter(x=>x.id!==r.id))}><Trash2 size={15}/></button></div>
+                <RouteEditor stage={stage} stages={stages} fields={fields} routes={[r]} onChange={next=>setRoutes(routes.map(x=>x.id===next.id?next:x))} onAdd={()=>addRoute(stage.id)} onRemove={id=>setRoutes(routes.filter(x=>x.id!==id))} />
+              </div>)}
+            </div>];
+          }) : <div className="wf-quality-empty"><GitBranch size={24}/><strong>لا توجد شروط مخصصة</strong><span>أضف الشرط من داخل المرحلة نفسها أو من زر «إضافة شرط للمرحلة المحددة».</span></div>}
         </section>
 
         <section id="wf-quality" className="wf-card wf-quality-card">
@@ -559,21 +563,21 @@ function RouteEditor({stage,stages,fields,routes,onChange,onAdd,onRemove}:{stage
     const operators=operatorOptions(field);
     const noValue=noValueOps.includes(r.condition?.operator||'');
     const values=field?.options||[];
-    const targets=stages.filter((_,i)=>r.action==='return'?i<index:r.action==='next'?i>index:false);
+    const targets=stages.filter((_,i)=>r.action==='return'?i<index:r.action==='next'?i!==index:false);
     return <div className="wf-route-card" key={r.id}>
-      <div className="wf-route-badge"><GitBranch size={14}/><span>{r.condition?'شرط':'فرع'}</span></div>
+      <div className="wf-route-badge"><GitBranch size={14}/><span>{r.condition?'شرط قرار':'فرع'}</span></div>
       <div className="wf-route-grid">
-        <label className="wf-input-group"><span>عند تحقق هذا الفرع</span><select value={r.action} onChange={e=>{const action=e.target.value;const targetsNow=stages.filter((_,i)=>action==='return'?i<index:action==='next'?i>index:false);const validTarget=targetsNow.some(s=>s.id===r.toStageId)?r.toStageId:(targetsNow[0]?.id||null);onChange({...r,action,toStageId:validTarget})}}>{Object.entries(actions).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>
-        <label className="wf-input-group"><span>الوجهة</span><select value={r.toStageId||''} disabled={!['next','return'].includes(r.action)} onChange={e=>onChange({...r,toStageId:e.target.value||null})}><option value="">{r.action==='return'?'اختر المرحلة السابقة':'اختر المرحلة التالية'}</option>{targets.map((s,i)=>{const realIndex=stages.findIndex(x=>x.id===s.id);return <option key={s.id} value={s.id}>{realIndex+1} — {s.nameAr}</option>})}</select></label>
-        <label className="wf-input-group"><span>وصف الفرع</span><input value={r.labelAr} onChange={e=>onChange({...r,labelAr:e.target.value})} placeholder={r.action==='return'?'مثال: إعادة للمدير':'مثال: التحويل للمراجعة'}/></label>
-        <label className="wf-input-group"><span>الشرط <em>اختياري</em></span><select value={r.condition?.fieldId||''} onChange={e=>{const id=e.target.value;const f=fields.find(x=>x.id===id);onChange({...r,condition:f?makeConditionForField(f):null})}}><option value="">بدون شرط</option>{sourceFields.map(f=><option key={f.id} value={f.id}>{f.labelAr||'عنصر بدون اسم'} · {fieldTypes[f.fieldType]||f.fieldType}</option>)}</select></label>
+        <label className="wf-input-group"><span>اسم العنصر الذي يعتمد عليه القرار</span><select value={r.condition?.fieldId||''} onChange={e=>{const id=e.target.value;const f=fields.find(x=>x.id===id);onChange({...r,condition:f?makeConditionForField(f):null})}}><option value="">اختر عنصر المعاملة</option>{sourceFields.map(f=><option key={f.id} value={f.id}>{f.labelAr||'عنصر بدون اسم'} · {fieldTypes[f.fieldType]||f.fieldType}{!f.stageId?' · بيانات الطلب':` · ${stages.find(s=>s.id===f.stageId)?.nameAr||'مرحلة'}`}</option>)}</select></label>
         {r.condition&&<>
-          <label className="wf-input-group"><span>مقارنة الإجابة</span><select value={r.condition.operator} onChange={e=>{const op=e.target.value;const vals=noValueOps.includes(op)?[]:(field?.fieldType==='select'||field?.fieldType==='multiselect')?(values.length?[values[0]]:[]):r.condition?.values||[];onChange({...r,condition:{...r.condition,operator:op,values:vals}})}}>{operators.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>
+          <label className="wf-input-group"><span>المقارنة</span><select value={r.condition.operator} onChange={e=>{const op=e.target.value;const vals=noValueOps.includes(op)?[]:(field?.fieldType==='select'||field?.fieldType==='multiselect')?(values.length?[values[0]]:[]):r.condition?.values||[];onChange({...r,condition:{...r.condition,operator:op,values:vals}})}}>{operators.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>
           {!noValue&&(field?.fieldType==='boolean')&&<label className="wf-input-group"><span>القيمة</span><select value={r.condition.values[0]||''} onChange={e=>onChange({...r,condition:{...r.condition!,values:[e.target.value]}})}><option value="">اختر الإجابة</option><option value="نعم">نعم</option><option value="لا">لا</option></select></label>}
           {!noValue&&(field?.fieldType==='select'||field?.fieldType==='multiselect')&&<label className="wf-input-group"><span>القيمة</span><select value={r.condition.values[0]||''} onChange={e=>onChange({...r,condition:{...r.condition!,values:[e.target.value]}})}><option value="">اختر قيمة</option>{values.map(v=><option key={v} value={v}>{v}</option>)}</select></label>}
           {!noValue&&field?.fieldType!=='boolean'&&field?.fieldType!=='select'&&field?.fieldType!=='multiselect'&&<label className="wf-input-group"><span>القيمة</span><input type={field?.fieldType==='date'?'date':field?.fieldType==='datetime'?'datetime-local':field?.fieldType==='number'?'number':'text'} value={r.condition.values.join('، ')} onChange={e=>onChange({...r,condition:{...r.condition!,values:e.target.value?[e.target.value]:[]}})} placeholder={field?.fieldType==='employee'?'استخدم «معبأ» للتحقق من اختيار موظف':'اكتب القيمة التي يعتمد عليها القرار'}/></label>}
           {noValue&&<div className="wf-condition-no-value">هذا القرار يعتمد على حالة الحقل فقط.</div>}
         </>}
+        <label className="wf-input-group"><span>عند تحقق الشرط</span><select value={r.action} onChange={e=>{const action=e.target.value;const targetsNow=stages.filter((_,i)=>action==='return'?i<index:action==='next'?i!==index:false);const validTarget=targetsNow.some(s=>s.id===r.toStageId)?r.toStageId:(targetsNow[0]?.id||null);onChange({...r,action,toStageId:validTarget})}}>{Object.entries(actions).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>
+        <label className="wf-input-group"><span>المرحلة الهدف</span><select value={r.toStageId||''} disabled={!['next','return'].includes(r.action)} onChange={e=>onChange({...r,toStageId:e.target.value||null})}><option value="">{r.action==='return'?'اختر المرحلة التي ستعود إليها':'اختر المرحلة الهدف'}</option>{targets.map(s=>{const realIndex=stages.findIndex(x=>x.id===s.id);return <option key={s.id} value={s.id}>{realIndex+1} — {s.nameAr}</option>})}</select></label>
+        <label className="wf-input-group"><span>وصف اختياري للانتقال</span><input value={r.labelAr} onChange={e=>onChange({...r,labelAr:e.target.value})} placeholder={r.action==='return'?'مثال: إعادة للمدير':'مثال: إذا تحقق الشرط انتقل إلى الاعتماد'} /></label>
       </div>
       <button className="wf-delete-route" onClick={()=>onRemove(r.id)} title="حذف الفرع"><Trash2 size={15}/></button>
     </div>;

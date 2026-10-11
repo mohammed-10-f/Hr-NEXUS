@@ -224,7 +224,7 @@ function validateModel(data:{allowedSubmitters:string[];stages:any[];fields:any[
     const action=t.action;
     if(action==='next' && !to) out.errors.push({code:'TARGET',message:'حدد المرحلة التالية للمسار.',transitionId:t.id});
     if(action==='return' && !to) out.errors.push({code:'TARGET',message:'حدد المرحلة التي ستعود إليها المعاملة.',transitionId:t.id});
-    if(action==='next' && to && (stageIndex.get(to)??-1) <= (stageIndex.get(from)??-1)) out.errors.push({code:'FORWARD',message:'تمرير المعاملة يجب أن يتجه إلى مرحلة لاحقة.',transitionId:t.id});
+    if(action==='next' && to && to===from) out.errors.push({code:'SELF_LOOP',message:'لا يمكن أن ينتقل الشرط إلى المرحلة نفسها؛ اختر مرحلة أخرى.',transitionId:t.id});
     if(action==='return' && to && (stageIndex.get(to)??999) >= (stageIndex.get(from)??-1)) out.errors.push({code:'RETURN_DIRECTION',message:'الإرجاع يجب أن يتجه إلى مرحلة سابقة.',transitionId:t.id});
     if(t.condition){
       if(!fieldById.has(t.condition.fieldId)) out.errors.push({code:'CONDITION_SOURCE',message:'مصدر الشرط غير موجود.',transitionId:t.id});
@@ -619,7 +619,19 @@ app.get('/test/templates/:id', async c=>{
   const workflow=await loadWorkflow(c,workflowId);
   if(!workflow)return errorResponse(c,'WORKFLOW-003',404);
   const validation=validateModel({allowedSubmitters:workflow.workflow.allowed_submitters,stages:workflow.stages,fields:workflow.fields,transitions:workflow.transitions});
-  return c.json({type,workflow,validation,testRequester:{name:'موظف الاختبار',employeeNumber:'SIM-0001',jobTitle:'بيانات وظيفية محاكاة',organizationUnit:'الوحدة التنظيمية المحاكاة',position:'المنصب المحاكى',manager:'المدير المباشر المحاكى'},testExecutor:{platformUserId:actorId(c),displayName:'مدير النظام',username:'superadmin',role:'Super Admin'}});
+  const executor=await c.env.DB.prepare(`SELECT id,username,display_name,status FROM platform_users WHERE id=? AND status='active' LIMIT 1`).bind(actorId(c)).first<any>();
+  const resolvedRequester:any[]=[];
+  for(const sf of workflow.systemFields.filter((x:any)=>x.scope==='requester').sort((a:any,b:any)=>Number(a.sort_order)-Number(b.sort_order))){
+    let value:any=null; let source='platform_user'; let available=true;
+    if(sf.source_key==='full_name') value=executor?.display_name||null;
+    else if(sf.source_key==='employee_number' || sf.source_key==='national_id' || sf.source_key==='nationality' || sf.source_key==='gender' || sf.source_key==='date_of_birth' || sf.source_key==='personal_phone' || sf.source_key==='personal_email' || sf.source_key==='short_address' || sf.source_key==='job_title' || sf.source_key==='organization_unit' || sf.source_key==='position' || sf.source_key==='direct_manager' || sf.source_key==='work_location' || sf.source_key==='employment_type' || sf.source_key==='contract_type' || sf.source_key==='contract_start_date' || sf.source_key==='contract_end_date' || sf.source_key==='actual_start_date' || sf.source_key==='join_date' || sf.source_key==='basic_salary' || sf.source_key==='housing_allowance' || sf.source_key==='transport_allowance' || sf.source_key==='other_allowances' || sf.source_key==='gosi_number' || sf.source_key==='insurance_number' || sf.source_key==='insurance_provider' || sf.source_key==='insurance_class' || sf.source_key==='professional_hazard' || sf.source_key==='residency_classification'){
+      available=false; source='phase5_employee';
+    } else {
+      available=false; source='unsupported';
+    }
+    resolvedRequester.push({sourceKey:sf.source_key,labelAr:sf.label_ar,value,available,source});
+  }
+  return c.json({type,workflow,validation,testRequester:{platformUserId:executor?.id||actorId(c),username:executor?.username||'superadmin',displayName:executor?.display_name||'مدير النظام',role:'Super Admin',isRealPlatformUser:true,employeeLinked:false,fields:resolvedRequester},testExecutor:{platformUserId:actorId(c),displayName:executor?.display_name||'مدير النظام',username:executor?.username||'superadmin',role:'Super Admin'}});
 });
 
 export default app;
