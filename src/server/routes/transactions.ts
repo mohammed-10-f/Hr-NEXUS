@@ -268,7 +268,17 @@ app.post('/:id/action', async c=>{
   const wf=await loadPublishedWorkflow(c,tx.transaction_type_id); if(!wf)return c.json({error:'WORKFLOW_NOT_AVAILABLE'},409);
   const answerMap=(await allAnswers(c,id)).map; for(const a of d.answers){ answerMap.set(a.fieldId,a.value); }
   for(const f of wf.fields.filter((x:any)=>x.stage_id===stage.id&&x.active)){if(f.required&&!d.answers.some(a=>a.fieldId===f.id&&a.value!==null&&a.value!=='')){return c.json({error:'TRANSACTION-004',message:`الحقل «${f.label_ar}» مطلوب.`},400);}}
-  if(d.answers.length) await c.env.DB.batch(d.answers.flatMap(a=>[c.env.DB.prepare(`DELETE FROM transaction_answers WHERE transaction_id=? AND field_id=?`).bind(id,a.fieldId),c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,field_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),id,a.fieldId,JSON.stringify(a.value)),c.env.DB.prepare(`INSERT INTO transaction_answer_history(id,transaction_id,execution_id,field_id,value_json,actor_user_id) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,active.id,a.fieldId,JSON.stringify(a.value),userId(c))])));
+  const active=await c.env.DB.prepare(`SELECT id,execution_order FROM transaction_stage_executions WHERE transaction_id=? AND status='active' ORDER BY execution_order DESC LIMIT 1`).bind(id).first<any>();
+  if(!active)return c.json({error:'ACTIVE_STAGE_EXECUTION_NOT_FOUND',message:'تعذر تحديد تنفيذ المرحلة الحالية.'},409);
+  if(d.answers.length){
+    const answerStatements:any[]=[];
+    for(const a of d.answers){
+      answerStatements.push(c.env.DB.prepare(`DELETE FROM transaction_answers WHERE transaction_id=? AND field_id=?`).bind(id,a.fieldId));
+      answerStatements.push(c.env.DB.prepare(`INSERT INTO transaction_answers(id,transaction_id,field_id,value_json) VALUES(?,?,?,?)`).bind(crypto.randomUUID(),id,a.fieldId,JSON.stringify(a.value)));
+      answerStatements.push(c.env.DB.prepare(`INSERT INTO transaction_answer_history(id,transaction_id,execution_id,field_id,value_json,actor_user_id) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,active.id,a.fieldId,JSON.stringify(a.value),userId(c)));
+    }
+    await c.env.DB.batch(answerStatements);
+  }
   let nextStage:any=null; let finalStatus=tx.status; let action=d.action; const activeDelegation=await c.env.DB.prepare(`SELECT id FROM transaction_delegations WHERE transaction_id=? AND status='active' AND to_employee_id=? LIMIT 1`).bind(id,employeeId(c)).first<any>(); if(activeDelegation && d.action==='next'){ await c.env.DB.batch([c.env.DB.prepare(`UPDATE transaction_delegations SET status='completed',completed_at=CURRENT_TIMESTAMP WHERE id=?`).bind(activeDelegation.id),c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,cid,userId(c),'delegation_complete',stage.id,d.reason??null,JSON.stringify({delegationId:activeDelegation.id}))]); await audit(c,'transaction_delegation_completed','transaction',id,{stageId:stage.id}); return c.json({ok:true,status:tx.status,currentStageId:stage.id,delegationCompleted:true}); }
   if(d.action==='delegate'){
     const cfg=safe(stage.config_json,{}); if(!cfg?.delegate?.enabled)return c.json({error:'DELEGATION_NOT_CONFIGURED',message:'التفويض غير متاح في هذه المرحلة.'},409);
@@ -289,7 +299,6 @@ app.post('/:id/action', async c=>{
     if(!nextStage)finalStatus='مكتملة';
   }
   const now=new Date();
-  const active=await c.env.DB.prepare(`SELECT id,execution_order FROM transaction_stage_executions WHERE transaction_id=? AND status='active' ORDER BY execution_order DESC LIMIT 1`).bind(id).first<any>();
   const statements:any[]=[
     c.env.DB.prepare(`UPDATE transaction_stage_executions SET status=?,completed_at=CURRENT_TIMESTAMP,acted_by=?,return_reason=? WHERE id=?`).bind(finalStatus==='مرفوضة'?'rejected':finalStatus==='ملغية'?'cancelled':action==='return'?'returned':'completed',userId(c),d.reason??null,active.id),
     c.env.DB.prepare(`INSERT INTO transaction_actions(id,transaction_id,company_id,actor_user_id,action,from_stage_id,to_stage_id,reason,metadata_json) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,cid,userId(c),action,stage.id,nextStage?.id??null,d.reason??null,JSON.stringify({executionOrder:active.execution_order}))
