@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Env } from '../env';
 import { audit } from '../audit';
 import { errorResponse } from '../errors';
+import { verifyPassword } from '../auth/crypto';
 import { requireAuthentication, requirePasswordChanged, requireSuperAdmin } from '../middleware/session';
 
 const app = new Hono<Env>();
@@ -309,6 +310,32 @@ app.get('/admin/types', async c=>{
     FROM transaction_types tt WHERE tt.company_id IS NULL ORDER BY tt.updated_at DESC,tt.name_ar
   `).all<any>();
   return c.json({items:rows.results});
+});
+
+const cleanupTransactionsSchema=z.object({currentPassword:z.string().min(1).max(256),confirmation:z.literal('CLEAN_TRANSACTIONS')});
+
+app.post('/admin/transactions/cleanup', async c=>{
+  const session=c.get('session');
+  if(!session?.platformUserId)return c.json({error:'SUPER_ADMIN_REQUIRED'},403);
+  const current=await c.env.DB.prepare(`SELECT id,username,password_hash,status FROM platform_users WHERE id=? LIMIT 1`).bind(session.platformUserId).first<any>();
+  if(!current || current.username!=='superadmin' || current.status!=='active')return c.json({error:'SUPER_ADMIN_REQUIRED'},403);
+  const parsed=cleanupTransactionsSchema.safeParse(await c.req.json().catch(()=>null));
+  if(!parsed.success)return c.json({error:'INVALID_CONFIRMATION',message:'بيانات التأكيد غير صحيحة.'},400);
+  if(!(await verifyPassword(parsed.data.currentPassword,current.password_hash)))return c.json({error:'INVALID_CREDENTIALS',message:'كلمة مرور Super Admin غير صحيحة.'},401);
+  const tables=['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transactions','transaction_sequences'];
+  const existing:any[]=[];
+  for(const table of tables){if(await tableExists(c,table))existing.push(table);}
+  try{
+    const statements:any[]=[];
+    // Children first so this remains safe even when foreign keys are enforced.
+    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transactions','transaction_sequences']){
+      if(existing.includes(table))statements.push(c.env.DB.prepare(`DELETE FROM ${table}`));
+    }
+    if(await tableExists(c,'notifications'))statements.push(c.env.DB.prepare(`DELETE FROM notifications WHERE type LIKE 'transaction_%'`));
+    if(statements.length)await batchChunked(c.env.DB,statements,40);
+  }catch(e){return workflowDbError(c,e);}
+  await audit(c,'transaction_runtime_data_cleaned','transaction',null,{tables:existing});
+  return c.json({ok:true,deletedTables:existing});
 });
 
 app.post('/admin/types/:id/copy', async c=>{
