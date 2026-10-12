@@ -70,12 +70,14 @@ const workflowSchema = z.object({
   targetEmployeeEnabled: z.boolean().optional(),
   targetEmployeeRequired: z.boolean().optional()
 });
-const systemFieldKeys = new Set(['employee_number','full_name','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','insurance_number','insurance_provider','insurance_class','professional_hazard','residency_classification']);
+const systemFieldKeys = new Set(['platform_username','full_name','employee_number','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','insurance_number','insurance_provider','insurance_class','professional_hazard','residency_classification']);
 
 const safeJson = (value: any, fallback: any) => {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
 };
 const actorId = (c: any) => c.get('session')?.platformUserId ?? null;
+
+async function batchChunked(db:any, statements:any[], size=80){ for(let i=0;i<statements.length;i+=size){ const chunk=statements.slice(i,i+size); if(chunk.length) await db.batch(chunk); } }
 
 async function ensurePhase6AuxTables(c:any){
   /* Remote D1s may have the original Phase 6 migrations applied without the
@@ -262,6 +264,8 @@ app.get('/admin/catalog', async c=>{
     c.env.DB.prepare(`SELECT id,name_ar FROM permissions ORDER BY resource,action`).all<any>()
   ]);
   const systemFields=[
+    ['platform_username','اسم مستخدم حساب مقدم الطلب','identity','text',false,'اسم المستخدم الحالي في منصة HR Nexus.',null],
+    ['full_name','اسم مقدم الطلب','identity','text',false,'اسم العرض لحساب مقدم الطلب الحالي.',null],
     ['employee_number','الرقم الوظيفي','identity','text',false,'رقم الموظف المعتمد في ملف الموظف.',null],
     ['full_name','اسم الموظف الكامل','identity','text',false,'الاسم الكامل من سجل الموظف.',null],
     ['national_id','رقم الهوية / الإقامة','identity','text',true,'بيانات الهوية من ملف الموظف.','employee.view_identity'],
@@ -327,7 +331,7 @@ app.post('/admin/types/:id/copy', async c=>{
     for(const f of source.fields){ const id=crypto.randomUUID(); fieldMap.set(f.id,id); statements.push(c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId, f.stage_id?stageMap.get(f.stage_id)||null:null, f.field_key, f.label_ar,f.label_en??null,f.field_type,f.required,f.options_json??'[]',f.config_json??'{}',f.sort_order)); }
     for(const t of source.transitions){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.from_stage_id),t.to_stage_id?stageMap.get(t.to_stage_id)||null:null,t.action,t.label_ar,t.condition_json?JSON.stringify({...safeJson(t.condition_json,null),fieldId:fieldMap.get(safeJson(t.condition_json,null)?.fieldId)||safeJson(t.condition_json,null)?.fieldId}):null,t.sort_order,t.active)); }
     for(const f of source.systemFields){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.source_key,f.label_ar,f.sort_order)); }
-    await c.env.DB.batch(statements);
+    await batchChunked(c.env.DB,statements);
     await audit(c,'workflow_template_copied','workflow',workflowId,{sourceWorkflowId:source.workflow.id});
   }catch(e){return workflowDbError(c,e);}
   return c.json({ok:true,id:typeId,workflowId},201);
@@ -361,18 +365,33 @@ app.post('/admin/types/:id/new-draft', async c=>{
   const type=await getType(c,c.req.param('id'));
   if(!type)return errorResponse(c,'WORKFLOW-003',404);
   const existing=await c.env.DB.prepare(`SELECT id FROM workflow_definitions WHERE transaction_type_id=? AND status='draft' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>();
-  if(existing)return c.json({ok:true,id:existing.id});
-  const current=await c.env.DB.prepare(`SELECT MAX(version) version FROM workflow_definitions WHERE transaction_type_id=?`).bind(type.id).first<any>();
-  const version=Number(current?.version||0)+1;
-  const workflowId=crypto.randomUUID(),stageId=crypto.randomUUID(),actor=actorId(c);
+  if(existing)return c.json({ok:true,id:existing.id,created:false});
+  const source=await c.env.DB.prepare(`SELECT id,version,description,allowed_submitters_json,status FROM workflow_definitions WHERE transaction_type_id=? AND status='active' ORDER BY version DESC LIMIT 1`).bind(type.id).first<any>();
+  const version=Number(source?.version||0)+1;
+  const workflowId=crypto.randomUUID(),actor=actorId(c);
   try{
-    await c.env.DB.batch([
-      c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`).bind(workflowId,type.id,version,type.description||null,type.allowed_submitters_json||'[]',actor,actor),
-      c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(stageId,workflowId,'المرحلة 1',1,'company_admin'),
+    const statements:any[]=[
+      c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`).bind(workflowId,type.id,version,source?.description??type.description??null,source?.allowed_submitters_json??type.allowed_submitters_json??JSON.stringify(['self']),actor,actor),
       c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,0,0)`).bind(crypto.randomUUID(),workflowId)
-    ]);
+    ];
+    if(source){
+      const src=await loadWorkflow(c,source.id);
+      if(src){
+        const stageMap=new Map<string,string>();
+        for(const s of src.stages){const id=crypto.randomUUID();stageMap.set(s.id,id);statements.push(c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId,s.name_ar,s.name_en??null,s.stage_order,s.responsible_type,s.responsible_value??null,s.duration_minutes??null,s.config_json??JSON.stringify(s.config||{})));}
+        const fieldMap=new Map<string,string>();
+        for(const f of src.fields){const id=crypto.randomUUID();fieldMap.set(f.id,id);statements.push(c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId,f.stage_id?stageMap.get(f.stage_id)||null:null,f.field_key,f.label_ar,f.label_en??null,f.field_type,f.required,f.options_json??'[]',f.config_json??'{}',f.sort_order));}
+        for(const t of src.transitions){const cnd=safeJson(t.condition_json,null);if(cnd?.fieldId)cnd.fieldId=fieldMap.get(cnd.fieldId)||cnd.fieldId;statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.from_stage_id)||t.from_stage_id,t.to_stage_id?stageMap.get(t.to_stage_id)||null:null,t.action,t.label_ar,cnd?JSON.stringify(cnd):null,t.sort_order,t.active));}
+        statements.push(c.env.DB.prepare(`UPDATE workflow_request_settings SET target_employee_enabled=?,target_employee_required=? WHERE workflow_id=?`).bind(src.requestSettings.targetEmployeeEnabled?1:0,src.requestSettings.targetEmployeeRequired?1:0,workflowId));
+        for(const f of src.systemFields)statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.source_key,f.label_ar,f.sort_order));
+      }
+    }else{
+      statements.push(c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,stage_order,responsible_type,active) VALUES(?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,'المرحلة 1',1,'company_admin'));
+    }
+    await batchChunked(c.env.DB,statements);
   }catch(e){return workflowDbError(c,e);}
-  return c.json({ok:true,id:workflowId},201);
+  await audit(c,'workflow_draft_created','workflow',workflowId,{sourceWorkflowId:source?.id||null,version});
+  return c.json({ok:true,id:workflowId,created:true},201);
 });
 
 app.get('/admin/types/:id', async c=>{
@@ -485,7 +504,7 @@ app.put('/admin/workflows/:id', async c=>{
     for(const f of data.systemFields){
       statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.sourceKey,f.labelAr,f.sortOrder));
     }
-    await c.env.DB.batch(statements);
+    await batchChunked(c.env.DB,statements);
   }catch(e){return workflowDbError(c,e);}
   await audit(c,'workflow_draft_saved','workflow',workflowId,{validationErrors:validation.errors.length,stageCount:normalized.stages.length,fieldCount:normalized.fields.length});
   return c.json({ok:true,validation});
@@ -621,15 +640,13 @@ app.get('/test/templates/:id', async c=>{
   const validation=validateModel({allowedSubmitters:workflow.workflow.allowed_submitters,stages:workflow.stages,fields:workflow.fields,transitions:workflow.transitions});
   const executor=await c.env.DB.prepare(`SELECT id,username,display_name,status FROM platform_users WHERE id=? AND status='active' LIMIT 1`).bind(actorId(c)).first<any>();
   const resolvedRequester:any[]=[];
+  const employeeSourceKeys=new Set(['employee_number','national_id','nationality','gender','date_of_birth','personal_phone','personal_email','short_address','job_title','organization_unit','position','direct_manager','work_location','employment_type','contract_type','contract_start_date','contract_end_date','actual_start_date','join_date','basic_salary','housing_allowance','transport_allowance','other_allowances','gosi_number','insurance_number','insurance_provider','insurance_class','professional_hazard','residency_classification']);
+  // A platform Super Admin has no implicit company/employee identity. We resolve
+  // account-level requester data directly and never fabricate Phase-5 values.
+  const platformValues:any={full_name:executor?.display_name||null,platform_username:executor?.username||null};
   for(const sf of workflow.systemFields.filter((x:any)=>x.scope==='requester').sort((a:any,b:any)=>Number(a.sort_order)-Number(b.sort_order))){
-    let value:any=null; let source='platform_user'; let available=true;
-    if(sf.source_key==='full_name') value=executor?.display_name||null;
-    else if(sf.source_key==='employee_number' || sf.source_key==='national_id' || sf.source_key==='nationality' || sf.source_key==='gender' || sf.source_key==='date_of_birth' || sf.source_key==='personal_phone' || sf.source_key==='personal_email' || sf.source_key==='short_address' || sf.source_key==='job_title' || sf.source_key==='organization_unit' || sf.source_key==='position' || sf.source_key==='direct_manager' || sf.source_key==='work_location' || sf.source_key==='employment_type' || sf.source_key==='contract_type' || sf.source_key==='contract_start_date' || sf.source_key==='contract_end_date' || sf.source_key==='actual_start_date' || sf.source_key==='join_date' || sf.source_key==='basic_salary' || sf.source_key==='housing_allowance' || sf.source_key==='transport_allowance' || sf.source_key==='other_allowances' || sf.source_key==='gosi_number' || sf.source_key==='insurance_number' || sf.source_key==='insurance_provider' || sf.source_key==='insurance_class' || sf.source_key==='professional_hazard' || sf.source_key==='residency_classification'){
-      available=false; source='phase5_employee';
-    } else {
-      available=false; source='unsupported';
-    }
-    resolvedRequester.push({sourceKey:sf.source_key,labelAr:sf.label_ar,value,available,source});
+    const isPlatform=Object.prototype.hasOwnProperty.call(platformValues,sf.source_key);
+    resolvedRequester.push({sourceKey:sf.source_key,labelAr:sf.label_ar,value:isPlatform?platformValues[sf.source_key]:null,available:isPlatform,source:isPlatform?'platform_user':employeeSourceKeys.has(sf.source_key)?'phase5_employee':'unsupported'});
   }
   return c.json({type,workflow,validation,testRequester:{platformUserId:executor?.id||actorId(c),username:executor?.username||'superadmin',displayName:executor?.display_name||'مدير النظام',role:'Super Admin',isRealPlatformUser:true,employeeLinked:false,fields:resolvedRequester},testExecutor:{platformUserId:actorId(c),displayName:executor?.display_name||'مدير النظام',username:executor?.username||'superadmin',role:'Super Admin'}});
 });

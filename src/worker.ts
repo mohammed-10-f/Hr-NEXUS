@@ -12,7 +12,7 @@ import workflows from './server/routes/workflows';
 import transactions from './server/routes/transactions';
 
 const app=new Hono<Env>();
-const BUILD_ID='PHASE6-ENTERPRISE-RUNTIME-20261010';
+const BUILD_ID='PHASE6-CLEAN-STUDIO-20261012';
 
 app.onError((err,c)=>{
   console.error('HR_NEXUS_UNHANDLED_ERROR',err);
