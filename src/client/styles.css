@@ -375,3 +375,25 @@
 
 /* Phase 6 explicit visual transaction map */
 .wf-flow-map-card{overflow:hidden}.wf-visual-flow{display:flex;flex-direction:column;align-items:center;gap:0;padding:10px 4px 22px}.wf-visual-node{width:min(760px,100%);display:flex;align-items:center;gap:14px;padding:16px 20px;border:1px solid #d7e1ee;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(16,48,88,.06);text-align:right}.wf-visual-node.requester{background:#f4f8fd;border-color:#bfd3ea}.wf-visual-node.complete{background:#f1fbf5;border-color:#b9dfc6}.wf-visual-node .wf-stage-number{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#0b376b;color:#fff;font-weight:800}.wf-visual-node div{display:flex;flex-direction:column;gap:4px}.wf-visual-node b{font-size:15px}.wf-visual-node span{font-size:12px;color:#667085}.wf-visual-connector{height:34px;display:grid;place-items:center;color:#6b8db1;font-size:20px;font-weight:800}.wf-visual-branches{width:min(760px,100%);display:flex;flex-direction:column;gap:8px;margin:8px 0 0;padding:10px 14px;border-right:3px solid #9ab7d6;background:#f8fbff;border-radius:12px}.wf-visual-branches div{display:flex;justify-content:space-between;gap:16px;font-size:12px}.wf-visual-branches span{color:#475467}.wf-visual-branches b{color:#0b376b;white-space:nowrap}
+
+/* Phase 6 transaction view — strict document/table presentation. */
+.tx-page .tx-card,.tx-page .tx-list-card{box-shadow:none;border-radius:0;border-left:0;border-right:0;background:#fff}
+.tx-page .tx-card{border-bottom:1px solid #d9dde5}
+.tx-page .tx-answer-execution{border-radius:0;box-shadow:none;background:#fff}
+.tx-page .tx-detail-grid{display:block}
+.tx-page .tx-card{margin:0}
+.tx-page .tx-card-head{border-bottom:1px solid #e5e7eb;padding-bottom:12px}
+.tx-page .tx-stage-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.tx-page .tx-field{margin-top:0}
+.tx-page .tx-field select[multiple]{min-height:120px}
+.tx-page .tx-current-stage-data{border-top:2px solid #344054}
+.tx-current-stage-label{font-size:.78rem;color:#475467}
+.tx-readonly-value{min-height:40px;padding:10px 12px;border:1px solid #e4e7ec;background:#f8fafc}
+.tx-page .tx-card-head svg,.tx-page .tx-action-buttons svg,.tx-page .page-header svg,.tx-page .tx-dot svg,.tx-page .tx-list-row>svg{display:none}
+.tx-page .tx-dot{border-radius:0;width:12px;height:12px;margin-bottom:10px}
+.tx-page .tx-step:not(:last-child)::after{right:12px;top:5px;width:calc(100% - 12px)}
+.tx-page .tx-history-groups{gap:0!important}
+.tx-page .tx-answer-execution{border-width:1px 0 0}
+@media(max-width:900px){.tx-page .tx-stage-form{grid-template-columns:1fr}}
+
+.tx-current-stage-label.delayed{font-weight:700;color:#b54708}

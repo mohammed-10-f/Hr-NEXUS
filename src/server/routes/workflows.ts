@@ -514,7 +514,7 @@ app.put('/admin/workflows/:id', async c=>{
     fields: current.fields.map((f:any)=>({
       id:f.id, stageId:f.stage_id??null, fieldKey:f.field_key, labelAr:f.label_ar, fieldType:f.field_type,
       required:Boolean(f.required), displayOnly:Boolean(f.config?.displayOnly), staticText:String(f.config?.staticText||''),
-      options:Array.isArray(f.options)?f.options:[], sortOrder:Number(f.sort_order??0)
+      options:Array.isArray(f.options)?f.options:[], defaultValue:f.config?.defaultValue ?? (f.field_type==='multiselect'?[]:''), sortOrder:Number(f.sort_order??0)
     })),
     transitions: current.transitions.map((t:any)=>({
       id:t.id, fromStageId:t.from_stage_id, toStageId:t.to_stage_id??null, action:t.action, labelAr:t.label_ar,
@@ -566,7 +566,8 @@ app.put('/admin/workflows/:id', async c=>{
       `).bind(s.id,workflowId,s.nameAr,null,s.stageOrder,s.responsibleType,s.responsibleValue??null,s.durationMinutes??null,JSON.stringify(s.config??{})));
     }
     for(const f of normalized.fields){
-      const config={displayOnly:Boolean(f.displayOnly), staticText:String(f.staticText||'')};
+      const defaultValue = f.fieldType==='multiselect' ? (Array.isArray(f.defaultValue)?f.defaultValue.filter((v:any)=>Array.isArray(f.options)&&f.options.includes(v)):[]) : (f.defaultValue===undefined||f.defaultValue===null?'':f.defaultValue);
+      const config={displayOnly:Boolean(f.displayOnly), staticText:String(f.staticText||''), defaultValue};
       statements.push(c.env.DB.prepare(`
         INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,1)

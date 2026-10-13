@@ -61,9 +61,9 @@ function transitionConditionMatches(condition:any, answers:Map<string,any>){
     const actual=answers.get(x.fieldId);
     const values=Array.isArray(x.values)?x.values:[];
     switch(x.operator){
-      case 'equals': return String(actual??'')===String(values[0]??'');
+      case 'equals': return Array.isArray(actual)?actual.some((v:any)=>String(v)===String(values[0]??'')):String(actual??'')===String(values[0]??'');
       case 'not_equals': return String(actual??'')!==String(values[0]??'');
-      case 'contains': return Array.isArray(actual)?actual.map(String).includes(String(values[0]??'')):String(actual??'').includes(String(values[0]??''));
+      case 'contains': return Array.isArray(actual)?values.every((wanted:any)=>actual.map(String).includes(String(wanted))):String(actual??'').includes(String(values[0]??''));
       case 'is_true': return actual===true || String(actual).toLowerCase()==='true' || String(actual)==='نعم';
       case 'is_false': return !(actual===true || String(actual).toLowerCase()==='true' || String(actual)==='نعم');
       case 'is_empty': return actual===null || actual===undefined || actual==='';
@@ -72,7 +72,7 @@ function transitionConditionMatches(condition:any, answers:Map<string,any>){
       case 'greater_or_equal': return Number(actual)>=Number(values[0]);
       case 'less_than': return Number(actual)<Number(values[0]);
       case 'less_or_equal': return Number(actual)<=Number(values[0]);
-      case 'in': return values.map(String).includes(String(actual??''));
+      case 'in': return Array.isArray(actual)?actual.some((v:any)=>values.map(String).includes(String(v))):values.map(String).includes(String(actual??''));
       default:return false;
     }
   });
@@ -223,9 +223,11 @@ app.get('/:id', async c=>{
     c.env.DB.prepare(`SELECT * FROM transaction_actions WHERE transaction_id=? ORDER BY created_at,id`).bind(id).all<any>(),
     employeeCard(c,tx.employee_id), employeeCard(c, c.get('session')?.employeeId || '')
   ]);
-  const [allWorkflowStages,currentStage]=await Promise.all([c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(tx.workflow_id).all<any>(),tx.current_stage_id?c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE id=?`).bind(tx.current_stage_id).first<any>():null]);
+  const [allWorkflowStages,currentStage,currentRoutes]=await Promise.all([c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE workflow_id=? AND active=1 ORDER BY stage_order`).bind(tx.workflow_id).all<any>(),tx.current_stage_id?c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE id=?`).bind(tx.current_stage_id).first<any>():null,tx.current_stage_id?c.env.DB.prepare(`SELECT * FROM workflow_transitions WHERE workflow_id=? AND from_stage_id=? AND active=1 ORDER BY sort_order,id`).bind(tx.workflow_id,tx.current_stage_id).all<any>():{results:[]}]);
   const actor= currentStage ? await canAct(c,tx,currentStage) : false;
-  return c.json({transaction:{...tx,data:safe(tx.data_json,{})},employee,requesterEmployee,workflowStages:allWorkflowStages.results,stages:stages.results,fields:fields.results.map((x:any)=>({...x,options:safe(x.options_json,[]),config:safe(x.config_json,{})})),answers:answers.results.map((x:any)=>({...x,value:safe(x.value_json,null)})),answerHistory:answerHistory.results.map((x:any)=>({...x,value:safe(x.value_json,null)})),actions:actions.results,currentStage:currentStage?{...currentStage,config:safe(currentStage.config_json,{})}:null,canAct:actor});
+  const allowedActions=currentRoutes.results.map((r:any)=>r.action).filter((x:string,i:number,a:string[])=>a.indexOf(x)===i);
+  const returnRoutes=currentRoutes.results.filter((r:any)=>r.action==='return'&&r.to_stage_id).map((r:any)=>({id:r.id,toStageId:r.to_stage_id,labelAr:r.label_ar}));
+  return c.json({transaction:{...tx,data:safe(tx.data_json,{})},employee,requesterEmployee,workflowStages:allWorkflowStages.results,stages:stages.results,fields:fields.results.map((x:any)=>({...x,options:safe(x.options_json,[]),config:safe(x.config_json,{})})),answers:answers.results.map((x:any)=>({...x,value:safe(x.value_json,null)})),answerHistory:answerHistory.results.map((x:any)=>({...x,value:safe(x.value_json,null)})),actions:actions.results,currentStage:currentStage?{...currentStage,config:safe(currentStage.config_json,{})}:null,allowedActions,returnRoutes,canAct:actor});
 });
 
 const createSchema=z.object({transactionTypeId:z.string().uuid(),targetEmployeeId:z.string().uuid().nullable().optional(),answers:z.array(z.object({fieldId:z.string().uuid(),value:z.any()})).default([])});
@@ -266,8 +268,12 @@ app.post('/:id/action', async c=>{
   const stage=await c.env.DB.prepare(`SELECT * FROM workflow_stages WHERE id=? AND workflow_id=?`).bind(tx.current_stage_id,tx.workflow_id).first<any>(); if(!stage)return c.json({error:'STAGE_NOT_FOUND'},409);
   const txFor={...tx,workflow:{id:tx.workflow_id}}; if(!(await canAct(c,txFor,stage)))return c.json({error:'STAGE_FORBIDDEN',message:'لا تملك صلاحية تنفيذ هذه المرحلة.'},403);
   const wf=await loadPublishedWorkflow(c,tx.transaction_type_id); if(!wf)return c.json({error:'WORKFLOW_NOT_AVAILABLE'},409);
+  const currentFields=wf.fields.filter((x:any)=>x.stage_id===stage.id&&x.active);
+  const currentFieldIds=new Set(currentFields.map((f:any)=>f.id));
+  const invalidAnswer=d.answers.find((a:any)=>!currentFieldIds.has(a.fieldId));
+  if(invalidAnswer)return c.json({error:'TRANSACTION-005',message:'يوجد عنصر إجابة غير تابع للمرحلة الحالية.'},400);
   const answerMap=(await allAnswers(c,id)).map; for(const a of d.answers){ answerMap.set(a.fieldId,a.value); }
-  for(const f of wf.fields.filter((x:any)=>x.stage_id===stage.id&&x.active)){if(f.required&&!d.answers.some(a=>a.fieldId===f.id&&a.value!==null&&a.value!=='')){return c.json({error:'TRANSACTION-004',message:`الحقل «${f.label_ar}» مطلوب.`},400);}}
+  for(const f of currentFields){if(f.required&&!d.answers.some(a=>a.fieldId===f.id&&a.value!==null&&a.value!==''&&!(Array.isArray(a.value)&&a.value.length===0))){return c.json({error:'TRANSACTION-004',message:`الحقل «${f.label_ar}» مطلوب.`},400);}}
   const active=await c.env.DB.prepare(`SELECT id,execution_order FROM transaction_stage_executions WHERE transaction_id=? AND status='active' ORDER BY execution_order DESC LIMIT 1`).bind(id).first<any>();
   if(!active)return c.json({error:'ACTIVE_STAGE_EXECUTION_NOT_FOUND',message:'تعذر تحديد تنفيذ المرحلة الحالية.'},409);
   if(d.answers.length){
@@ -308,5 +314,47 @@ app.post('/:id/action', async c=>{
   await c.env.DB.batch(statements); await audit(c,`transaction_${action}`,'transaction',id,{fromStageId:stage.id,toStageId:nextStage?.id??null,reason:d.reason??null});
   return c.json({ok:true,status:finalStatus,currentStageId:nextStage?.id??null});
 });
+
+export async function processTransactionDeadlines(env:any){
+  const db=env.DB;
+  const due=await db.prepare(`
+    SELECT tse.id execution_id,tse.transaction_id,tse.due_at,t.transaction_number,t.company_id,t.current_stage_id,
+           ws.name_ar stage_name,ws.responsible_type,ws.responsible_value
+    FROM transaction_stage_executions tse
+    JOIN transactions t ON t.id=tse.transaction_id
+    JOIN workflow_stages ws ON ws.id=tse.stage_id
+    WHERE tse.status='active' AND tse.due_at IS NOT NULL AND tse.due_at<=CURRENT_TIMESTAMP AND tse.delayed_at IS NULL
+  `).all<any>();
+  for(const row of due.results){
+    await db.prepare(`UPDATE transaction_stage_executions SET delayed_at=CURRENT_TIMESTAMP WHERE id=? AND status='active' AND delayed_at IS NULL`).bind(row.execution_id).run();
+    const ids=new Set<string>();
+    const override=await db.prepare(`SELECT employee_ids_json FROM workflow_company_stage_assignments wca JOIN transactions t ON t.workflow_id=wca.workflow_id AND t.company_id=wca.company_id WHERE t.id=? AND wca.stage_id=? AND wca.company_id=?`).bind(row.transaction_id,row.current_stage_id,row.company_id).first<any>();
+    if(override){ for(const id of safe(override.employee_ids_json,[])) if(id) ids.add(id); }
+    else if(row.responsible_type==='company_admin'){
+      const r=await db.prepare(`SELECT cu.employee_id FROM company_users cu JOIN user_roles ur ON ur.company_user_id=cu.id JOIN roles ro ON ro.id=ur.role_id WHERE cu.company_id=? AND cu.status='active' AND cu.employee_id IS NOT NULL AND ro.status='active' AND (ro.code='company_admin' OR ro.name_ar='مدير الشركة')`).bind(row.company_id).all<any>(); for(const x of r.results)if(x.employee_id)ids.add(x.employee_id);
+    } else if(row.responsible_type==='employee_owner'){
+      const x=await db.prepare(`SELECT employee_id FROM transactions WHERE id=?`).bind(row.transaction_id).first<any>(); if(x?.employee_id)ids.add(x.employee_id);
+    } else if(row.responsible_type==='direct_manager'){
+      const x=await db.prepare(`SELECT e.manager_employee_id FROM transactions t JOIN employees e ON e.id=t.employee_id AND e.company_id=t.company_id WHERE t.id=? AND t.company_id=?`).bind(row.transaction_id,row.company_id).first<any>(); if(x?.manager_employee_id)ids.add(x.manager_employee_id);
+    } else if(row.responsible_type==='department_manager'){
+      const r=await db.prepare(`SELECT m.id FROM transactions t JOIN employees e ON e.id=t.employee_id AND e.company_id=t.company_id JOIN positions p ON p.id=e.position_id AND p.company_id=e.company_id JOIN employees m ON m.position_id=p.manager_position_id AND m.company_id=e.company_id WHERE t.id=? AND t.company_id=? AND m.status<>'terminated'`).bind(row.transaction_id,row.company_id).all<any>(); for(const x of r.results)ids.add(x.id);
+    } else if(row.responsible_type==='position_holder'){
+      const r=await db.prepare(`SELECT id FROM employees WHERE company_id=? AND position_id=? AND status<>'terminated'`).bind(row.company_id,row.responsible_value).all<any>(); for(const x of r.results)ids.add(x.id);
+    } else if(row.responsible_type==='role'){
+      const r=await db.prepare(`SELECT DISTINCT cu.employee_id FROM company_users cu JOIN user_roles ur ON ur.company_user_id=cu.id JOIN roles ro ON ro.id=ur.role_id WHERE cu.company_id=? AND cu.status='active' AND cu.employee_id IS NOT NULL AND ro.company_id=? AND ro.status='active' AND ro.code=?`).bind(row.company_id,row.company_id,row.responsible_value).all<any>(); for(const x of r.results)if(x.employee_id)ids.add(x.employee_id);
+    } else if(row.responsible_type==='permission'){
+      const r=await db.prepare(`SELECT DISTINCT cu.employee_id FROM company_users cu JOIN user_permissions up ON up.company_user_id=cu.id WHERE cu.company_id=? AND cu.status='active' AND cu.employee_id IS NOT NULL AND up.permission_id=? AND up.effect='allow' UNION SELECT DISTINCT cu.employee_id FROM company_users cu JOIN user_roles ur ON ur.company_user_id=cu.id JOIN roles ro ON ro.id=ur.role_id JOIN role_permissions rp ON rp.role_id=ro.id WHERE cu.company_id=? AND cu.status='active' AND cu.employee_id IS NOT NULL AND ro.status='active' AND rp.permission_id=?`).bind(row.company_id,row.responsible_value,row.company_id,row.responsible_value).all<any>(); for(const x of r.results)if(x.employee_id)ids.add(x.employee_id);
+    }
+    const delegated=await db.prepare(`SELECT to_employee_id FROM transaction_delegations WHERE transaction_id=? AND stage_execution_id=? AND status='active'`).bind(row.transaction_id,row.execution_id).all<any>(); for(const x of delegated.results)if(x.to_employee_id)ids.add(x.to_employee_id);
+    for(const eid of ids){
+      const users=await db.prepare(`SELECT id FROM company_users WHERE company_id=? AND employee_id=? AND status='active'`).bind(row.company_id,eid).all<any>();
+      for(const u of users.results){
+        const body=`المرحلة «${row.stage_name}» في المعاملة رقم ${row.transaction_number} تجاوزت المدة المحددة. التنفيذ: ${row.execution_id}`;
+        const exists=await db.prepare(`SELECT id FROM notifications WHERE company_id=? AND user_id=? AND type='transaction_stage_delayed' AND body_ar=? LIMIT 1`).bind(row.company_id,u.id,body).first<any>();
+        if(!exists) await db.prepare(`INSERT INTO notifications(id,company_id,user_id,title_ar,body_ar,type) VALUES(?,?,?,?,?,'transaction_stage_delayed')`).bind(crypto.randomUUID(),row.company_id,u.id,'تأخر مرحلة معاملة',body).run();
+      }
+    }
+  }
+}
 
 export default app;

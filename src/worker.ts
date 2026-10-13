@@ -9,10 +9,10 @@ import platform from './server/routes/platform';
 import context from './server/routes/context';
 import company from './server/routes/company';
 import workflows from './server/routes/workflows';
-import transactions from './server/routes/transactions';
+import transactions, { processTransactionDeadlines } from './server/routes/transactions';
 
 const app=new Hono<Env>();
-const BUILD_ID='PHASE6-CLEAN-STUDIO-20261013-V5';
+const BUILD_ID='PHASE6-CLEAN-STUDIO-20261013-V6';
 
 app.onError((err,c)=>{
   console.error('HR_NEXUS_UNHANDLED_ERROR',err);
@@ -34,5 +34,5 @@ app.all('/api/*',(c)=>c.json({error:'NOT_FOUND'},404));
 app.all('*',async c=>c.env.ASSETS.fetch(c.req.raw));
 export default {
   fetch: app.fetch,
-  scheduled: async (_event: any, env: Env['Bindings']) => { await processProbation(env); }
+  scheduled: async (_event: any, env: Env['Bindings']) => { await processProbation(env); await processTransactionDeadlines(env); }
 };
