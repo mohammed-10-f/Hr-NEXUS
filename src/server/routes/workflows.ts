@@ -312,7 +312,51 @@ app.get('/admin/types', async c=>{
   return c.json({items:rows.results});
 });
 
-const cleanupTransactionsSchema=z.object({currentPassword:z.string().min(1).max(256),confirmation:z.literal('CLEAN_TRANSACTIONS')});
+const cleanupTransactionsSchema=z.object({currentPassword:z.string().min(1).max(256),confirmation:z.literal('RESET_TRANSACTIONS')});
+
+async function resetAllPhase6Transactions(c:any){
+  // This is a full Phase 6 reset: remove both operational transaction instances
+  // AND the experimental transaction/workflow templates created in Studio.
+  // Phase 1–5 tables/data are deliberately outside this list.
+  const tablesInDeleteOrder=[
+    'transaction_answer_history',
+    'transaction_delegations',
+    'transaction_answers',
+    'transaction_actions',
+    'transaction_feedback',
+    'transaction_attachments',
+    'transaction_stage_executions',
+    'transactions',
+    'transaction_sequences',
+    'workflow_company_stage_assignments',
+    'workflow_company_settings',
+    'transaction_type_companies',
+    'workflow_questions',
+    'workflow_conditions',
+    'workflow_transitions',
+    'workflow_fields',
+    'workflow_stages',
+    'workflow_system_fields',
+    'workflow_request_settings',
+    'workflow_settings',
+    'workflow_definitions',
+    'transaction_types'
+  ];
+  const existing:string[]=[];
+  for(const table of tablesInDeleteOrder){if(await tableExists(c,table))existing.push(table);}
+  const statements:any[]=[];
+  for(const table of existing)statements.push(c.env.DB.prepare(`DELETE FROM ${table}`));
+  // Remove only Phase 6 notification/audit records. Do not touch employee/company
+  // notifications or unrelated Phase 1–5 audit history.
+  if(await tableExists(c,'notifications')){
+    statements.push(c.env.DB.prepare(`DELETE FROM notifications WHERE type LIKE 'transaction_%' OR type LIKE 'workflow_transaction_%' OR type LIKE 'workflow_%'`));
+  }
+  if(await tableExists(c,'audit_logs')){
+    statements.push(c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource IN ('transaction','workflow') OR action LIKE 'transaction_%' OR action LIKE 'workflow_%'`));
+  }
+  if(statements.length)await batchChunked(c.env.DB,statements,40);
+  return existing;
+}
 
 app.post('/admin/transactions/cleanup', async c=>{
   const session=c.get('session');
@@ -320,29 +364,20 @@ app.post('/admin/transactions/cleanup', async c=>{
   const current=await c.env.DB.prepare(`SELECT id,username,password_hash,status FROM platform_users WHERE id=? LIMIT 1`).bind(session.platformUserId).first<any>();
   if(!current || current.username!=='superadmin' || current.status!=='active')return c.json({error:'SUPER_ADMIN_REQUIRED'},403);
   const parsed=cleanupTransactionsSchema.safeParse(await c.req.json().catch(()=>null));
-  if(!parsed.success)return c.json({error:'INVALID_CONFIRMATION',message:'بيانات التأكيد غير صحيحة.'},400);
+  if(!parsed.success)return c.json({error:'INVALID_CONFIRMATION',message:'اكتب RESET_TRANSACTIONS حرفياً للتأكيد.'},400);
   if(!(await verifyPassword(parsed.data.currentPassword,current.password_hash)))return c.json({error:'INVALID_CREDENTIALS',message:'كلمة مرور Super Admin غير صحيحة.'},401);
-  const tables=['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences'];
-  const existing:any[]=[];
-  for(const table of tables){if(await tableExists(c,table))existing.push(table);}
   try{
-    const statements:any[]=[];
-    // Children first so this remains safe even when foreign keys are enforced.
-    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences','workflow_company_stage_assignments','workflow_company_settings','transaction_type_companies']){
-      if(existing.includes(table))statements.push(c.env.DB.prepare(`DELETE FROM ${table}`));
-    }
-    // Test/operational transaction audit records are removed with the runtime
-    // data so the cleanup really leaves no transaction trace. Workflow design
-    // audit entries remain intact.
-    if(await tableExists(c,'audit_logs'))statements.push(c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource='transaction' OR action LIKE 'transaction_%'`));
-    if(await tableExists(c,'notifications'))statements.push(c.env.DB.prepare(`DELETE FROM notifications WHERE type LIKE 'transaction_%' OR type LIKE 'workflow_transaction_%'`));
-    if(statements.length)await batchChunked(c.env.DB,statements,40);
+    const deleted=await resetAllPhase6Transactions(c);
+    return c.json({ok:true,reset:true,deletedTables:deleted,message:'تمت إعادة Phase 6 للمعاملات إلى الصفر. حُذفت جميع القوالب التجريبية والمعاملات التشغيلية المرتبطة بها، دون المساس بـ Phase 1–5.'});
   }catch(e){return workflowDbError(c,e);}
-  await audit(c,'workflow_runtime_cleanup','workflow',null,{scope:'transaction_runtime',tables:existing});
-  return c.json({ok:true,deletedTables:existing});
 });
 
 app.post('/admin/types/:id/copy', async c=>{
+  await ensurePhase6AuxTables(c);
+  await c.env.DB.batch([
+    c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS workflow_company_settings (workflow_id TEXT NOT NULL, company_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0, allowed_submitters_json TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(workflow_id,company_id))`),
+    c.env.DB.prepare(`CREATE TABLE IF NOT EXISTS workflow_company_stage_assignments (workflow_id TEXT NOT NULL, stage_id TEXT NOT NULL, company_id TEXT NOT NULL, employee_ids_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(workflow_id,stage_id,company_id))`)
+  ]);
   // "نسخ" in Studio means publish the already-approved workflow to a company,
   // not create a second editable workflow. The company receives the exact same
   // stages, fields, conditions and routes. Only submitter permissions and
@@ -361,11 +396,20 @@ app.post('/admin/types/:id/copy', async c=>{
   const company=await c.env.DB.prepare(`SELECT id,display_name FROM companies WHERE id=? AND status='active'`).bind(parsed.data.companyId).first<any>();
   if(!company)return c.json({error:'COMPANY_NOT_FOUND',message:'الشركة غير موجودة أو غير نشطة.'},404);
   try{
-    await c.env.DB.prepare(`
-      INSERT INTO workflow_company_settings(workflow_id,company_id,active,allowed_submitters_json)
-      VALUES(?,?,1,(SELECT allowed_submitters_json FROM workflow_definitions WHERE id=?))
-      ON CONFLICT(workflow_id,company_id) DO UPDATE SET active=1,allowed_submitters_json=excluded.allowed_submitters_json,updated_at=CURRENT_TIMESTAMP
-    `).bind(activeW.id,company.id,activeW.id).run();
+    await ensurePhase6AuxTables(c);
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        INSERT INTO workflow_company_settings(workflow_id,company_id,active,allowed_submitters_json)
+        VALUES(?,?,1,(SELECT allowed_submitters_json FROM workflow_definitions WHERE id=?))
+        ON CONFLICT(workflow_id,company_id) DO UPDATE SET active=1,allowed_submitters_json=excluded.allowed_submitters_json,updated_at=CURRENT_TIMESTAMP
+      `).bind(activeW.id,company.id,activeW.id),
+      // Keep the legacy activation map synchronized for older Phase 6 runtime paths.
+      c.env.DB.prepare(`
+        INSERT INTO transaction_type_companies(transaction_type_id,company_id,active)
+        SELECT transaction_type_id,?,1 FROM workflow_definitions WHERE id=?
+        ON CONFLICT(transaction_type_id,company_id) DO UPDATE SET active=1
+      `).bind(company.id,activeW.id)
+    ]);
     await audit(c,'workflow_deployed_to_company','workflow',activeW.id,{companyId:company.id,companyName:company.display_name,version:activeW.version,lockedPath:true});
   }catch(e){return workflowDbError(c,e);}
   return c.json({ok:true,workflowId:activeW.id,companyId:company.id,companyName:company.display_name,version:activeW.version,pathLocked:true});
