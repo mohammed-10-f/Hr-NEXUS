@@ -328,7 +328,7 @@ app.post('/admin/transactions/cleanup', async c=>{
   try{
     const statements:any[]=[];
     // Children first so this remains safe even when foreign keys are enforced.
-    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences']){
+    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences','workflow_company_stage_assignments','workflow_company_settings','transaction_type_companies']){
       if(existing.includes(table))statements.push(c.env.DB.prepare(`DELETE FROM ${table}`));
     }
     // Test/operational transaction audit records are removed with the runtime
@@ -343,43 +343,32 @@ app.post('/admin/transactions/cleanup', async c=>{
 });
 
 app.post('/admin/types/:id/copy', async c=>{
-  await ensurePhase6AuxTables(c);
-  const requestedId=c.req.param('id');
-  // Copy accepts the transaction-type id used by the Studio list. Older builds
-  // accidentally passed that id into loadWorkflow(), which expects a workflow id
-  // and caused WORKFLOW-003 even though the template existed. Resolve the actual
-  // draft first, then active version as fallback.
-  let source=await loadWorkflow(c,requestedId);
-  if(!source){
-    const sourceRow=await c.env.DB.prepare(`
-      SELECT id FROM workflow_definitions
-      WHERE transaction_type_id=? AND status IN ('draft','active')
-      ORDER BY CASE WHEN status='draft' THEN 0 ELSE 1 END, version DESC
-      LIMIT 1
-    `).bind(requestedId).first<any>();
-    if(sourceRow) source=await loadWorkflow(c,sourceRow.id);
-  }
-  if(!source)return errorResponse(c,'WORKFLOW-003',404);
-  const typeId=crypto.randomUUID(), workflowId=crypto.randomUUID(), actor=actorId(c);
+  // "نسخ" in Studio means publish the already-approved workflow to a company,
+  // not create a second editable workflow. The company receives the exact same
+  // stages, fields, conditions and routes. Only submitter permissions and
+  // stage assignees are company-configurable.
+  const typeId=c.req.param('id');
+  const parsed=z.object({companyId:z.string().uuid()}).safeParse(await c.req.json().catch(()=>null));
+  if(!parsed.success)return c.json({error:'WORKFLOW-COMPANY-001',message:'اختر شركة صحيحة.'},400);
+  const activeW=await c.env.DB.prepare(`
+    SELECT wd.id,wd.version,tt.name_ar
+    FROM workflow_definitions wd
+    JOIN transaction_types tt ON tt.id=wd.transaction_type_id AND tt.company_id IS NULL
+    WHERE wd.transaction_type_id=? AND wd.status='active'
+    ORDER BY wd.version DESC LIMIT 1
+  `).bind(typeId).first<any>();
+  if(!activeW)return c.json({error:'WORKFLOW-004',message:'يجب اعتماد المعاملة أولاً قبل نقلها إلى شركة.'},409);
+  const company=await c.env.DB.prepare(`SELECT id,display_name FROM companies WHERE id=? AND status='active'`).bind(parsed.data.companyId).first<any>();
+  if(!company)return c.json({error:'COMPANY_NOT_FOUND',message:'الشركة غير موجودة أو غير نشطة.'},404);
   try{
-    const statements:D1PreparedStatement[]=[
-      c.env.DB.prepare(`INSERT INTO transaction_types(id,company_id,name_ar,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'inactive',?,?)`)
-        .bind(typeId,null,`${source.workflow.name_ar} — نسخة`,source.workflow.description??null,JSON.stringify(source.workflow.allowed_submitters||['self']),actor,actor),
-      c.env.DB.prepare(`INSERT INTO workflow_definitions(id,transaction_type_id,version,description,allowed_submitters_json,status,created_by,updated_by) VALUES(?,?,?,?,?,'draft',?,?)`)
-        .bind(workflowId,typeId,1,source.workflow.description??null,JSON.stringify(source.workflow.allowed_submitters||['self']),actor,actor),
-      c.env.DB.prepare(`INSERT INTO workflow_request_settings(id,workflow_id,target_employee_enabled,target_employee_required) VALUES(?,?,?,?)`)
-        .bind(crypto.randomUUID(),workflowId,source.requestSettings.targetEmployeeEnabled?1:0,source.requestSettings.targetEmployeeRequired?1:0)
-    ];
-    const stageMap=new Map<string,string>();
-    for(const s of source.stages){ const id=crypto.randomUUID(); stageMap.set(s.id,id); statements.push(c.env.DB.prepare(`INSERT INTO workflow_stages(id,workflow_id,name_ar,name_en,stage_order,responsible_type,responsible_value,duration_minutes,config_json,active) VALUES(?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId,s.name_ar,s.name_en??null,s.stage_order,s.responsible_type,s.responsible_value??null,s.duration_minutes??null,s.config_json??JSON.stringify(s.config||{}))); }
-    const fieldMap=new Map<string,string>();
-    for(const f of source.fields){ const id=crypto.randomUUID(); fieldMap.set(f.id,id); statements.push(c.env.DB.prepare(`INSERT INTO workflow_fields(id,workflow_id,stage_id,field_key,label_ar,label_en,field_type,required,options_json,config_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`).bind(id,workflowId, f.stage_id?stageMap.get(f.stage_id)||null:null, f.field_key, f.label_ar,f.label_en??null,f.field_type,f.required,f.options_json??'[]',f.config_json??'{}',f.sort_order)); }
-    for(const t of source.transitions){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_transitions(id,workflow_id,from_stage_id,to_stage_id,action,label_ar,condition_json,sort_order,active) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),workflowId,stageMap.get(t.from_stage_id),t.to_stage_id?stageMap.get(t.to_stage_id)||null:null,t.action,t.label_ar,t.condition_json?JSON.stringify({...safeJson(t.condition_json,null),fieldId:fieldMap.get(safeJson(t.condition_json,null)?.fieldId)||safeJson(t.condition_json,null)?.fieldId}):null,t.sort_order,t.active)); }
-    for(const f of source.systemFields){ statements.push(c.env.DB.prepare(`INSERT INTO workflow_system_fields(id,workflow_id,scope,source_key,label_ar,sort_order,active) VALUES(?,?,?,?,?,?,1)`).bind(crypto.randomUUID(),workflowId,f.scope,f.source_key,f.label_ar,f.sort_order)); }
-    await batchChunked(c.env.DB,statements);
-    await audit(c,'workflow_template_copied','workflow',workflowId,{sourceWorkflowId:source.workflow.id});
+    await c.env.DB.prepare(`
+      INSERT INTO workflow_company_settings(workflow_id,company_id,active,allowed_submitters_json)
+      VALUES(?,?,1,(SELECT allowed_submitters_json FROM workflow_definitions WHERE id=?))
+      ON CONFLICT(workflow_id,company_id) DO UPDATE SET active=1,allowed_submitters_json=excluded.allowed_submitters_json,updated_at=CURRENT_TIMESTAMP
+    `).bind(activeW.id,company.id,activeW.id).run();
+    await audit(c,'workflow_deployed_to_company','workflow',activeW.id,{companyId:company.id,companyName:company.display_name,version:activeW.version,lockedPath:true});
   }catch(e){return workflowDbError(c,e);}
-  return c.json({ok:true,id:typeId,workflowId},201);
+  return c.json({ok:true,workflowId:activeW.id,companyId:company.id,companyName:company.display_name,version:activeW.version,pathLocked:true});
 });
 
 app.post('/admin/types', async c=>{

@@ -146,33 +146,33 @@ function makePage(model: WorkflowPdfModel, page: number, total: number) {
 }
 
 function buildPdf(jpegs: Uint8Array[], widths: number[], heights: number[]) {
+  // Each PDF object must be a single contiguous byte stream. The previous
+  // implementation pushed dictionary/text/image fragments as separate PDF
+  // objects, which produced a structurally invalid PDF that could appear blank.
   const objects: Uint8Array[] = [];
   const enc = new TextEncoder();
+  const concat=(parts:Uint8Array[])=>{const n=parts.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(n);let o=0;for(const part of parts){out.set(part,o);o+=part.length;}return out;};
   const header = enc.encode('%PDF-1.4\n%\xFF\xFF\xFF\xFF\n');
-  const offsets: number[] = [0];
-  const push = (v: string | Uint8Array) => objects.push(typeof v === 'string' ? enc.encode(v) : v);
-  push('<< /Type /Catalog /Pages 2 0 R >>');
-  const pageCount = jpegs.length;
-  const kids = Array.from({ length: pageCount }, (_, i) => `${3 + i * 3} 0 R`).join(' ');
-  push(`<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`);
-  for (let i = 0; i < pageCount; i++) {
-    const pageObj = 3 + i * 3, contentObj = 4 + i * 3, imageObj = 5 + i * 3;
-    push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im${i} ${imageObj} 0 R >> >> /Contents ${contentObj} 0 R >>`);
-    const content = enc.encode(`q\n595 0 0 842 0 0 cm\n/Im${i} Do\nQ\n`);
-    push(`<< /Length ${content.length} >>\nstream\n`); push(content); push('\nendstream');
-    const jpeg = jpegs[i];
-    push(`<< /Type /XObject /Subtype /Image /Width ${widths[i]} /Height ${heights[i]} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`); push(jpeg); push('\nendstream');
+  objects.push(enc.encode('<< /Type /Catalog /Pages 2 0 R >>'));
+  const pageCount=jpegs.length;
+  const kids=Array.from({length:pageCount},(_,i)=>`${3+i*3} 0 R`).join(' ');
+  objects.push(enc.encode(`<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`));
+  for(let i=0;i<pageCount;i++){
+    const pageObj=3+i*3, contentObj=4+i*3, imageObj=5+i*3;
+    void pageObj; void contentObj; void imageObj;
+    objects.push(enc.encode(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im${i} ${imageObj} 0 R >> >> /Contents ${contentObj} 0 R >>`));
+    const content=enc.encode(`q\n595 0 0 842 0 0 cm\n/Im${i} Do\nQ\n`);
+    objects.push(concat([enc.encode(`<< /Length ${content.length} >>\nstream\n`),content,enc.encode('\nendstream')]));
+    const jpeg=jpegs[i];
+    objects.push(concat([enc.encode(`<< /Type /XObject /Subtype /Image /Width ${widths[i]} /Height ${heights[i]} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`),jpeg,enc.encode('\nendstream')]));
   }
-  const chunks: Uint8Array[] = [header]; let pos = header.length;
-  objects.forEach((obj, i) => { const num = i + 1; offsets[num] = pos; const a = enc.encode(`${num} 0 obj\n`), b = enc.encode('\nendobj\n'); chunks.push(a, obj, b); pos += a.length + obj.length + b.length; });
-  const xrefPos = pos;
-  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (let i = 1; i <= objects.length; i++) xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
-  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  const chunks:Uint8Array[]=[header]; let pos=header.length; const offsets:number[]=[0];
+  objects.forEach((obj,i)=>{const num=i+1;offsets[num]=pos;const a=enc.encode(`${num} 0 obj\n`),b=enc.encode('\nendobj\n');chunks.push(a,obj,b);pos+=a.length+obj.length+b.length;});
+  const xrefPos=pos; let xref=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<=objects.length;i++)xref+=`${String(offsets[i]).padStart(10,'0')} 00000 n \n`;
+  xref+=`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
   chunks.push(enc.encode(xref));
-  const total = chunks.reduce((n, c) => n + c.length, 0); const out = new Uint8Array(total); let at = 0;
-  chunks.forEach(c => { out.set(c, at); at += c.length; });
-  return out;
+  return concat(chunks);
 }
 
 export async function downloadWorkflowMapPdf(model: WorkflowPdfModel) {
