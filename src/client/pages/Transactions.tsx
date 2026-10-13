@@ -46,7 +46,6 @@ export function Transactions(){
  </div>
 }
 
-const formatAnswer=(v:any)=>Array.isArray(v)?v.join('، '):(v===null||v===undefined||v===""?'—':typeof v==='object'?JSON.stringify(v):String(v));
 function renderStageField(f:any,values:Record<string,any>,setValues:any){
  const v=values[f.id]??f.config?.defaultValue??(f.field_type==='multiselect'?[]:f.field_type==='boolean'?false:"");
  const set=(value:any)=>setValues((x:any)=>({...x,[f.id]:value}));
