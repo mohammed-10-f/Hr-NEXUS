@@ -322,25 +322,43 @@ app.post('/admin/transactions/cleanup', async c=>{
   const parsed=cleanupTransactionsSchema.safeParse(await c.req.json().catch(()=>null));
   if(!parsed.success)return c.json({error:'INVALID_CONFIRMATION',message:'بيانات التأكيد غير صحيحة.'},400);
   if(!(await verifyPassword(parsed.data.currentPassword,current.password_hash)))return c.json({error:'INVALID_CREDENTIALS',message:'كلمة مرور Super Admin غير صحيحة.'},401);
-  const tables=['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transactions','transaction_sequences'];
+  const tables=['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences'];
   const existing:any[]=[];
   for(const table of tables){if(await tableExists(c,table))existing.push(table);}
   try{
     const statements:any[]=[];
     // Children first so this remains safe even when foreign keys are enforced.
-    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transactions','transaction_sequences']){
+    for(const table of ['transaction_answer_history','transaction_delegations','transaction_actions','transaction_answers','transaction_stage_executions','transaction_feedback','transaction_attachments','transactions','transaction_sequences']){
       if(existing.includes(table))statements.push(c.env.DB.prepare(`DELETE FROM ${table}`));
     }
-    if(await tableExists(c,'notifications'))statements.push(c.env.DB.prepare(`DELETE FROM notifications WHERE type LIKE 'transaction_%'`));
+    // Test/operational transaction audit records are removed with the runtime
+    // data so the cleanup really leaves no transaction trace. Workflow design
+    // audit entries remain intact.
+    if(await tableExists(c,'audit_logs'))statements.push(c.env.DB.prepare(`DELETE FROM audit_logs WHERE resource='transaction' OR action LIKE 'transaction_%'`));
+    if(await tableExists(c,'notifications'))statements.push(c.env.DB.prepare(`DELETE FROM notifications WHERE type LIKE 'transaction_%' OR type LIKE 'workflow_transaction_%'`));
     if(statements.length)await batchChunked(c.env.DB,statements,40);
   }catch(e){return workflowDbError(c,e);}
-  await audit(c,'transaction_runtime_data_cleaned','transaction',null,{tables:existing});
+  await audit(c,'workflow_runtime_cleanup','workflow',null,{scope:'transaction_runtime',tables:existing});
   return c.json({ok:true,deletedTables:existing});
 });
 
 app.post('/admin/types/:id/copy', async c=>{
   await ensurePhase6AuxTables(c);
-  const source=await loadWorkflow(c,c.req.param('id'));
+  const requestedId=c.req.param('id');
+  // Copy accepts the transaction-type id used by the Studio list. Older builds
+  // accidentally passed that id into loadWorkflow(), which expects a workflow id
+  // and caused WORKFLOW-003 even though the template existed. Resolve the actual
+  // draft first, then active version as fallback.
+  let source=await loadWorkflow(c,requestedId);
+  if(!source){
+    const sourceRow=await c.env.DB.prepare(`
+      SELECT id FROM workflow_definitions
+      WHERE transaction_type_id=? AND status IN ('draft','active')
+      ORDER BY CASE WHEN status='draft' THEN 0 ELSE 1 END, version DESC
+      LIMIT 1
+    `).bind(requestedId).first<any>();
+    if(sourceRow) source=await loadWorkflow(c,sourceRow.id);
+  }
   if(!source)return errorResponse(c,'WORKFLOW-003',404);
   const typeId=crypto.randomUUID(), workflowId=crypto.randomUUID(), actor=actorId(c);
   try{
